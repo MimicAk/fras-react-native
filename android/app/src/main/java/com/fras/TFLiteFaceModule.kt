@@ -27,7 +27,7 @@ class TFLiteFaceModule(reactContext: ReactApplicationContext) : ReactContextBase
         private const val TAG = "TFLiteFaceModule"
         private const val MODEL_INPUT_SIZE = 160
         private const val EMBEDDING_SIZE = 512
-        private const val MODEL_PATH = "facenet_512.tflite"
+        private const val MODEL_PATH = "model.tflite"
         private const val MAX_MODEL_LOAD_ATTEMPTS = 3
 
         // Known problematic devices and their workarounds
