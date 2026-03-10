@@ -1,0 +1,13 @@
+{
+  "name": "Fras",
+  "displayName": "Fras",
+  "plugins": [
+    "expo-sqlite"
+  ],
+  "icon": "./assets/images/logo.png",
+  "splash": {
+    "image": "./assets/images/logo.png",
+    "resizeMode": "contain",
+    "backgroundColor": "#ffffff"
+  }
+}

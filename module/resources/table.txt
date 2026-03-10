@@ -1,0 +1,60 @@
+{
+    "SubTaskRecords":{
+        "ProjectID":"",
+        "ProjectName":"",
+        "TaskID":"",
+        "TaskName":"",
+        "SubTaskID":"",
+        "SubTaskName":"",
+    },
+
+
+    "AssetRecords":{
+        "AssetID":"",
+        "AssetName":"",
+        "AssetType":"",
+        "AssetStatus":""
+    },
+
+    "WorkEntry":{
+        "UUID":"",
+        "ProjectID":"",
+        "WorkID":"",
+        "SubTaskID":"",
+        "WorkStatus":"",
+        "WorkRecords":[
+            "ASDF1",
+            "ASDF2",
+            "ASDF3"
+        ]
+    },
+
+
+    "WorkRecords":{
+        "ID":"ASDF1",
+        "UUID":"",
+        "EMPID":["StaffIDs"],
+        "WorkStartsAt":"DateWithTime",
+        "WorkEndssAt":"DateWithTime",
+        "BeforeImgIDs":[""],
+        "AfterImgIDs":[""]
+    },
+    "AssetUsage":{
+        "WorkRecordID":"ASDF1",
+        "EMPID":"StaffIDs",
+        "AssetIDs":[""],
+        "AssetImgIDs":[""]
+    },
+    "Image":{
+        "ImgID":"",
+        "date":"",
+        "ImgStr":"",
+        "SrcType":""
+    }    
+}
+
+
+API required for sync Sub Task and assets in offline
+API required for sync data to online
+
+
