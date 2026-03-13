@@ -26,8 +26,8 @@ const { width, height } = Dimensions.get('window');
 const CAPTURE_STEPS = [
   { id: 1, title: 'Neutral Expression', desc: 'Look straight at the camera.' },
   { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
-  { id: 3, title: 'Look Left', desc: 'Turn your head slightly to the left.' },
-  { id: 4, title: 'Look Right', desc: 'Turn your head slightly to the right.' },
+  // { id: 3, title: 'Look Left', desc: 'Turn your head slightly to the left.' },
+  // { id: 4, title: 'Look Right', desc: 'Turn your head slightly to the right.' },
   { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
 ];
 
@@ -109,9 +109,15 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
       return;
     let snapshotPath = null;
     try {
-      const snap = await cameraRef.current.takeSnapshot({ quality: 30 });
+      const snap = await cameraRef.current.takeSnapshot({
+        quality: 30,
+        skipMetadata: true,
+      });
       snapshotPath = `file://${snap.path}`;
-      const result = await checkFaceQualityRealTime(snapshotPath);
+      const result = await checkFaceQualityRealTime(
+        snapshotPath,
+        cameraPosition,
+      );
       setStatusText(
         result?.isReady
           ? 'Ready! Press Capture'
@@ -192,10 +198,7 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         return;
       }
 
-      // const avgEmbedding = computeAverageAndNormalize(validEmbeddings);
-
-
-      const avgEmbedding = validEmbeddings[0];
+      const avgEmbedding = computeAverageAndNormalize(validEmbeddings);
 
       const db = await connectToDatabase();
 
@@ -252,32 +255,21 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
   const computeAverageAndNormalize = vectors => {
     if (!vectors || vectors.length === 0) return [];
 
-    // Use the first vector to determine dimension (assuming all have same length)
-    const dim = vectors[0].length;
+    // normalize each embedding first
+    const normalized = vectors.map(v => normalizeVector(v));
 
-    // Optional: basic validation (you can remove if you trust the input)
-    if (!Number.isInteger(dim) || dim <= 0) {
-      console.warn('Invalid or empty dimension in first vector');
-      return [];
-    }
-
-    // Initialize sum vector
+    const dim = normalized[0].length;
     const sum = new Array(dim).fill(0);
 
-    // Accumulate all vectors
-    vectors.forEach(vec => {
-      // Optional: skip invalid vectors (uncomment if needed)
-      if (!Array.isArray(vec) || vec.length !== dim) return;
-
+    normalized.forEach(vec => {
       vec.forEach((v, i) => {
         sum[i] += v;
       });
     });
 
-    // Compute average
-    const avg = sum.map(s => s / vectors.length);
+    const avg = sum.map(v => v / normalized.length);
 
-    return avg;
+    return normalizeVector(avg);
   };
 
   // --- UI States ---

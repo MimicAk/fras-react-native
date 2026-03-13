@@ -7,14 +7,26 @@ import {
   compressBase64Image,
 } from '../utils/FaceRecognitionUtil';
 
+import {
+  buildHNSWIndex,
+  ensureHNSWIndex,
+  hasIndex,
+  hnswSearch,
+} from '../utils/hnswIndex';
 // ────────────────────────────────────────────────
 //  CONFIGURATION
 // ────────────────────────────────────────────────
-const FACE_MATCH_THRESHOLD = 0.60;
-const BATCH_SIZE = 2000;
+const FACE_MATCH_THRESHOLD = 0.45;
+const BATCH_SIZE = 3000;
+
+// RECOGNISE
+
+let lastEmbedding = null;
+let lastEmbeddingTimestamp = 0;
+const EMBEDDING_CACHE_TTL_MS = 5000;
 
 // In-memory vector cache
-const VECTOR_STORE = {
+export const VECTOR_STORE = {
   data: [],
   lastUpdated: null,
 };
@@ -29,6 +41,10 @@ export const loadVectorsService = async db => {
       .filter(item => item?.vector && item.vector !== 'null' && item.uuid)
       .map(item => ({ ...item, parsedVector: JSON.parse(item.vector) }));
     VECTOR_STORE.lastUpdated = new Date();
+
+    // buildHNSWIndex(VECTOR_STORE.data);
+
+    // await buildHNSWIndex();
     return true;
   } catch {
     throw new Error('Failed to load face vectors from database');
@@ -57,27 +73,56 @@ const cosineSimilarity = (a, b) => {
 
 // NORMALIZE VECTOR
 export const normalizeVector = v => {
-  // Convert whatever-it-is to a proper dense array
   const vec = Array.from(v);
-
-  if (!Array.isArray(vec) || vec.length === 0) {
-    console.warn('normalizeVector: input could not be converted to array', v);
-    return [];
-  }
-
-  let sumSq = 0;
-  for (let x of vec) {
-    sumSq += x * x;
-  }
-  const mag = Math.sqrt(sumSq) || 1; // fallback to 1 avoids NaN
-
-  return vec.map(x => x / mag);
+  let sqSum = 0;
+  for (let i = 0; i < vec.length; i++) sqSum += vec[i] * vec[i];
+  const invMag = 1.0 / (Math.sqrt(sqSum) + 1e-10);
+  return vec.map(x => x * invMag);
 };
 
 // ────────────────────────────────────────────────
 //  BATCHED MATCHING
 // ────────────────────────────────────────────────
-const findMatchesInBatches = async embedding => {
+const findMatchesInBatches = async queryEmbedding => {
+  return oldLinearSearch(queryEmbedding);
+
+  // 1. Always normalize the query
+  const normalizedQuery = normalizeVector(queryEmbedding);
+
+  // 2. Sync Index
+  await ensureHNSWIndex(VECTOR_STORE.lastUpdated?.getTime());
+
+  if (!hasIndex()) {
+    return oldLinearSearch(normalizedQuery);
+  }
+
+  // 3. Search KNN (k=10 is usually enough for face login)
+  const { neighbors, distances } = await hnswSearch(normalizedQuery, 10);
+
+  const matches = [];
+  neighbors.forEach((dataIndex, pos) => {
+    const item = VECTOR_STORE.data[dataIndex];
+    if (!item) return;
+
+    // In HNSW cosine, distance is (1 - similarity)
+    // or sometimes score is direct similarity depending on the lib version
+    const similarity = 1 - distances[pos];
+
+    if (similarity >= FACE_MATCH_THRESHOLD) {
+      matches.push({
+        uuid: item.uuid,
+        name: item.name,
+        staffid: item.staffid,
+        similarity,
+      });
+    }
+  });
+
+  matches.sort((a, b) => b.similarity - a.similarity);
+  return { matches, bestScore: matches[0]?.similarity || 0 };
+};
+
+const oldLinearSearch = async embedding => {
   const matches = [];
   let bestScore = 0;
 
@@ -126,10 +171,47 @@ export const recognizeFaceService = async ({ cameraRef, switchCamera }) => {
       throw new Error('No enrolled faces available');
     }
 
+    const now = Date.now();
+
+    // ─── Try cache first ───
+    // if (
+    //   lastEmbedding &&
+    //   now - lastEmbeddingTimestamp < EMBEDDING_CACHE_TTL_MS
+    // ) {
+    //   console.log(
+    //     '[CACHE HIT] Reusing embedding from',
+    //     (now - lastEmbeddingTimestamp) / 1000,
+    //     'seconds ago',
+    //   );
+
+    //   const { matches, bestScore } = await findMatchesInBatches(lastEmbedding);
+
+    //   if (matches.length === 0) {
+    //     return {
+    //       status: 'no_match',
+    //       message: `Face not recognized (${(bestScore * 100).toFixed(
+    //         1,
+    //       )}% match)`,
+    //     };
+    //   }
+
+    //   if (matches.length === 1) {
+    //     return {
+    //       status: 'single',
+    //       employee: matches[0],
+    //     };
+    //   }
+
+    //   return {
+    //     status: 'multiple',
+    //     matches,
+    //   };
+    // }
+
     // Capture fast photo
     const photo = await cameraRef.current.takePhoto({
       flash: 'off',
-      qualityPrioritization: 'speed',
+      qualityPrioritization: 'quality',
     });
 
     const filePath = photo.path.startsWith('file://')
@@ -137,12 +219,26 @@ export const recognizeFaceService = async ({ cameraRef, switchCamera }) => {
       : `file://${photo.path}`;
 
     // Get embedding
-    const embedding = await getFaceEmbeddingFromImage(
+    const emb1 = await getFaceEmbeddingFromImage(
       filePath,
       switchCamera ? 'front' : 'back',
     );
 
-    // const embedding = normalizeVector(rawEmbedding);
+    // small delay to stabilize sensor
+    await new Promise(r => setTimeout(r, 60));
+
+    const emb2 = await getFaceEmbeddingFromImage(
+      filePath,
+      switchCamera ? 'front' : 'back',
+    );
+
+    // average embeddings
+    const rawEmbedding = emb1.map((v, i) => (v + emb2[i]) / 2);
+
+    // lastEmbedding = embedding;
+    // lastEmbeddingTimestamp = now;
+
+    const embedding = normalizeVector(rawEmbedding);
 
     // console.log(rawEmbedding, embedding);
 
@@ -172,6 +268,9 @@ export const recognizeFaceService = async ({ cameraRef, switchCamera }) => {
       matches,
     };
   } catch (error) {
+    // lastEmbedding = null;
+    // lastEmbeddingTimestamp = 0;
+
     return {
       status: 'error',
       message: error.message || 'Recognition failed',
@@ -382,6 +481,8 @@ export const updateFaceService = async ({
       VECTOR_STORE.data.push(updatedVector);
       console.log('Vector added to cache');
     }
+
+    // ensureHNSWIndex(Date.now());
 
     console.log('===== FACE UPDATE SUCCESS =====');
 

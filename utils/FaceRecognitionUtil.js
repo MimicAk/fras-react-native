@@ -12,7 +12,7 @@ const { TFLiteFaceModule } = NativeModules;
 //  QUALITY THRESHOLDS (tunable)
 // ────────────────────────────────────────────────
 const QUALITY_THRESHOLDS = {
-  MIN_FACE_PERCENTAGE: 40, // % of image occupied by face
+  MIN_FACE_PERCENTAGE: 30, // % of image occupied by face
   MAX_HEAD_ROTATION_DEG: 15, // X/Y/Z rotation limit
   MIN_EYE_OPEN_PROB: 0.8, // Both eyes ≥ 80% open
   MIN_FACE_CONFIDENCE: 0.75, // ML Kit confidence
@@ -217,8 +217,17 @@ export const getFaceEmbeddingFromImage = async (
   enableValidation = true,
 ) => {
   try {
+    console.log(imagePath);
+
+    const normalizedPath = await normalizeImageForDetection(
+      imagePath,
+      cameraType,
+    );
+
+    console.log('normPath: ', normalizedPath);
+
     // 1. Detect faces (accurate mode)
-    const faces = await FaceDetection.detect(imagePath, {
+    const faces = await FaceDetection.detect(normalizedPath, {
       performanceMode: 'accurate',
       landmarkMode: 'all',
       classificationMode: 'all',
@@ -232,7 +241,7 @@ export const getFaceEmbeddingFromImage = async (
     // 2. Get image dimensions
     const imageSize = await new Promise((resolve, reject) => {
       Image.getSize(
-        imagePath,
+        normalizedPath,
         (w, h) => resolve({ width: w, height: h }),
         reject,
       );
@@ -244,7 +253,11 @@ export const getFaceEmbeddingFromImage = async (
     }
 
     // 4. Crop to clean square face
-    const croppedPath = await cropFaceToSquare(imagePath, face, cameraType);
+    const croppedPath = await cropFaceToSquare(
+      normalizedPath,
+      face,
+      cameraType,
+    );
 
     // 5. Timeout-protected native embedding call
     const timeoutPromise = new Promise((_, reject) =>
@@ -376,9 +389,17 @@ export const compressBase64Image = async (
 // ────────────────────────────────────────────────
 //  REAL-TIME FACE QUALITY CHECK FOR PREVIEW
 // ────────────────────────────────────────────────
-export const checkFaceQualityRealTime = async imagePath => {
+export const checkFaceQualityRealTime = async (
+  imagePath,
+  cameraType = 'unknown',
+) => {
   try {
-    const faces = await FaceDetection.detect(imagePath, {
+    const normalizedPath = await normalizeImageForDetection(
+      imagePath,
+      cameraType,
+    );
+
+    const faces = await FaceDetection.detect(normalizedPath, {
       performanceMode: 'fast',
       landmarkMode: 'all',
       classificationMode: 'all',
@@ -396,7 +417,7 @@ export const checkFaceQualityRealTime = async imagePath => {
     const face = faces[0];
     const imageSize = await new Promise((resolve, reject) =>
       Image.getSize(
-        imagePath,
+        normalizedPath,
         (w, h) => resolve({ width: w, height: h }),
         reject,
       ),
@@ -411,10 +432,16 @@ export const checkFaceQualityRealTime = async imagePath => {
     }
 
     if (
-      Math.abs(face.rotationX) > 20 ||
-      Math.abs(face.rotationY) > 20 ||
-      Math.abs(face.rotationZ) > 20
+      Math.abs(face.yawAngle) > 20 ||
+      Math.abs(face.pitchAngle) > 20 ||
+      Math.abs(face.rollAngle) > 20
     ) {
+      // if (
+      //   Math.abs(face.rotationX) > 20 ||
+      //   Math.abs(face.rotationY) > 20 ||
+      //   Math.abs(face.rotationZ) > 20
+      // )
+
       return { isReady: false, message: 'Keep your head straight' };
     }
 
@@ -425,8 +452,30 @@ export const checkFaceQualityRealTime = async imagePath => {
       return { isReady: false, message: 'Open your eyes fully' };
     }
 
+    if (normalizedPath !== imagePath.replace('file://', '')) {
+      RNFS.unlink(normalizedPath).catch(() => {});
+    }
+
     return { isReady: true, message: 'Ready to capture' };
   } catch (err) {
     return { isReady: false, message: 'Checking face quality...' };
   }
 };
+
+async function normalizeImageForDetection(imagePath, cameraType) {
+  if (cameraType !== 'back') return imagePath;
+
+  const resized = await ImageResizer.createResizedImage(
+    imagePath,
+    1280,
+    1280,
+    'JPEG',
+    100,
+    0, // this forces orientation normalization
+    undefined,
+    false,
+    { mode: 'contain' },
+  );
+
+  return resized.uri;
+}
