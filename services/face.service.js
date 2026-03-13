@@ -16,11 +16,14 @@ import {
 // ────────────────────────────────────────────────
 //  CONFIGURATION
 // ────────────────────────────────────────────────
-const FACE_MATCH_THRESHOLD = 0.45;
+// const FACE_MATCH_THRESHOLD = 0.60;
+
+const RECOGNITION_THRESHOLD = 0.50; //FOR DAILY CHECKIN & CHECKOUT
+const ENROLLMENT_DUPLICATE_THRESHOLD = 0.45; // FOR DUPLICATE CHECKS
+const TEMPLATE_UPDATE_THRESHOLD = 0.60; // DAILY SUCCESSFULL CHECKIN UPDATE
 const BATCH_SIZE = 3000;
 
 // RECOGNISE
-
 let lastEmbedding = null;
 let lastEmbeddingTimestamp = 0;
 const EMBEDDING_CACHE_TTL_MS = 5000;
@@ -141,7 +144,7 @@ const oldLinearSearch = async embedding => {
 
       if (similarity > bestScore) bestScore = similarity;
 
-      if (similarity >= FACE_MATCH_THRESHOLD) {
+      if (similarity >= RECOGNITION_THRESHOLD) {
         matches.push({
           uuid: item.uuid,
           name: item.name,
@@ -526,7 +529,7 @@ const findDuplicateFace = async (embedding, vectors, staffId) => {
         matchedEmployee = item;
       }
 
-      if (similarity >= FACE_MATCH_THRESHOLD) {
+      if (similarity >= ENROLLMENT_DUPLICATE_THRESHOLD) {
         return { highestScore, matchedEmployee };
       }
     }

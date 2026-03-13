@@ -1,3 +1,5 @@
+// utils/hnswIndex.js
+
 import { HNSW } from 'hnsw';
 import { VECTOR_STORE } from '../services/face.service';
 
