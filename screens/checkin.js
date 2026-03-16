@@ -246,6 +246,9 @@ function CheckInScreen({
         }
 
         setPendingPerson(faceResult.employee);
+
+        console.log(faceResult.employee);
+        
         setShowConfirmation(true);
         return;
       }

@@ -9,6 +9,7 @@ import {
   getAllStaffNotSync,
   markStaffSynced,
 } from '../database/staff.repository';
+import { loadVectorsService } from './face.service';
 
 export const pullVectorsService = async ({ token, userGuid, onProgress }) => {
   const db = await connectToDatabase();
@@ -102,6 +103,8 @@ export const pushVectorsService = async ({ token }) => {
   }
 
   await markStaffSynced(db);
+
+  loadVectorsService(db);
 
   return { pushed: unSynced.length };
 };

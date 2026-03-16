@@ -217,14 +217,14 @@ export const getFaceEmbeddingFromImage = async (
   enableValidation = true,
 ) => {
   try {
-    console.log(imagePath);
+    // console.log(imagePath);
 
     const normalizedPath = await normalizeImageForDetection(
       imagePath,
       cameraType,
     );
 
-    console.log('normPath: ', normalizedPath);
+    // console.log('normPath: ', normalizedPath);
 
     // 1. Detect faces (accurate mode)
     const faces = await FaceDetection.detect(normalizedPath, {

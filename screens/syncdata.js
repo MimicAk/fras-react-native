@@ -17,6 +17,7 @@ import {
   pullVectorsService,
   pushVectorsService,
 } from '../services/sync.service';
+import { loadVectorsService } from '../services/face.service';
 
 export default function SyncData({ navigation }) {
   const { user } = useAuth();

@@ -49,6 +49,7 @@ import {
   initBackgroundFetch,
   startForegroundSyncService,
 } from '../services/backgroundWorker';
+import { loadVectorsService } from '../services/face.service';
 
 Geolocation.setRNConfiguration({
   locationProvider: 'playServices', // Android only
@@ -244,6 +245,7 @@ class OptimizedLocationManager {
 // ────────────────────────────────────────────────
 
 export default function LandingPage({ navigation }) {
+
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
 
@@ -695,6 +697,8 @@ export default function LandingPage({ navigation }) {
             );
           }, 500);
         }
+
+        // loadVectorsService(db);
       } catch {}
     };
 

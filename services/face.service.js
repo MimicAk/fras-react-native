@@ -7,21 +7,21 @@ import {
   compressBase64Image,
 } from '../utils/FaceRecognitionUtil';
 
-import {
-  buildHNSWIndex,
-  ensureHNSWIndex,
-  hasIndex,
-  hnswSearch,
-} from '../utils/hnswIndex';
+import { faceIndexManager } from '../utils/hnswIndex';
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
 // ────────────────────────────────────────────────
 //  CONFIGURATION
 // ────────────────────────────────────────────────
 // const FACE_MATCH_THRESHOLD = 0.60;
 
-const RECOGNITION_THRESHOLD = 0.50; //FOR DAILY CHECKIN & CHECKOUT
+const RECOGNITION_THRESHOLD = 0.5; //FOR DAILY CHECKIN & CHECKOUT
 const ENROLLMENT_DUPLICATE_THRESHOLD = 0.45; // FOR DUPLICATE CHECKS
-const TEMPLATE_UPDATE_THRESHOLD = 0.60; // DAILY SUCCESSFULL CHECKIN UPDATE
-const BATCH_SIZE = 3000;
+const TEMPLATE_UPDATE_THRESHOLD = 0.6; // DAILY SUCCESSFULL CHECKIN UPDATE
+const BATCH_SIZE = 2000;
+
+// VECTOR STORAGE KEY
+const VECTOR_VERSION_KEY = 'FACE_VECTOR_VERSION';
 
 // RECOGNISE
 let lastEmbedding = null;
@@ -42,14 +42,39 @@ export const loadVectorsService = async db => {
     const staffList = await getAllStaff(db);
     VECTOR_STORE.data = staffList
       .filter(item => item?.vector && item.vector !== 'null' && item.uuid)
-      .map(item => ({ ...item, parsedVector: JSON.parse(item.vector) }));
-    VECTOR_STORE.lastUpdated = new Date();
+      .map(item => {
+        const parsed = JSON.parse(item.vector);
 
-    // buildHNSWIndex(VECTOR_STORE.data);
+        const validArray = Array.isArray(parsed)
+          ? parsed
+          : Object.values(parsed);
 
-    // await buildHNSWIndex();
+        return {
+          ...item,
+          parsedVector: validArray,
+        };
+      });
+
+    const storedVersion = await AsyncStorage.getItem(VECTOR_VERSION_KEY);
+
+    VECTOR_STORE.lastUpdated = storedVersion
+      ? Number(storedVersion)
+      : Date.now();
+
+    // Fire & Forget: Build the high-speed index in the background
+    setTimeout(() => {
+      if (faceIndexManager.hasIndex()) return;
+      console.log('[FACE] Starting lazy HNSW build in background');
+      faceIndexManager
+        .buildIndex(VECTOR_STORE.data, VECTOR_STORE.lastUpdated)
+        .catch(err =>
+          console.log('[HNSW] Lazy build failed (non-critical)', err),
+        );
+    }, 3000);
+
     return true;
-  } catch {
+  } catch (error) {
+    console.error('[FACE] loadVectorsService error:', error);
     throw new Error('Failed to load face vectors from database');
   }
 };
@@ -83,35 +108,58 @@ export const normalizeVector = v => {
   return vec.map(x => x * invMag);
 };
 
+export const blendAndNormalizeVectors = (oldVector, newVector, alpha = 0.9) => {
+  const oldArr = Array.from(oldVector);
+  const newArr = Array.from(newVector);
+  const blended = oldArr.map((val, i) => alpha * val + (1 - alpha) * newArr[i]);
+  return normalizeVector(blended);
+};
+
 // ────────────────────────────────────────────────
 //  BATCHED MATCHING
 // ────────────────────────────────────────────────
+// ────────────────────────────────────────────────
+//   BATCHED MATCHING (HNSW with Linear Fallback)
+// ────────────────────────────────────────────────
 const findMatchesInBatches = async queryEmbedding => {
-  return oldLinearSearch(queryEmbedding);
+  const normalizedQuery = queryEmbedding; //already normalized
 
-  // 1. Always normalize the query
-  const normalizedQuery = normalizeVector(queryEmbedding);
+  return oldLinearSearch(normalizedQuery);
 
-  // 2. Sync Index
-  await ensureHNSWIndex(VECTOR_STORE.lastUpdated?.getTime());
+  if (!faceIndexManager.hasIndex() && !faceIndexManager.isIndexBuilding()) {
+    // Start building now if not started yet (progressive start)
+    faceIndexManager
+      .buildIndex(VECTOR_STORE.data, VECTOR_STORE.lastUpdated)
+      .catch(() => {});
+  }
 
-  if (!hasIndex()) {
+  // return oldLinearSearch(normalizedQuery);
+
+  console.log('hasIndex:', faceIndexManager.hasIndex());
+  console.log('isBuilding:', faceIndexManager.isIndexBuilding());
+  // Fallback to old scan if HNSW isn't ready or built yet
+  if (!faceIndexManager.hasIndex() || faceIndexManager.isIndexBuilding()) {
     return oldLinearSearch(normalizedQuery);
   }
 
-  // 3. Search KNN (k=10 is usually enough for face login)
-  const { neighbors, distances } = await hnswSearch(normalizedQuery, 10);
-
+  // Fast HNSW Search
+  const { neighbors, distances } = await faceIndexManager.search(
+    normalizedQuery,
+    10,
+  );
   const matches = [];
+
+  console.log('HNSW raw results', neighbors, distances);
+
   neighbors.forEach((dataIndex, pos) => {
     const item = VECTOR_STORE.data[dataIndex];
     if (!item) return;
 
-    // In HNSW cosine, distance is (1 - similarity)
-    // or sometimes score is direct similarity depending on the lib version
-    const similarity = 1 - distances[pos];
+    // Convert distance to similarity if needed (depends on underlying HNSW lib logic)
+    // Assuming distance is inner product / cosine distance (1 - similarity)
+    const similarity = distances[pos];
 
-    if (similarity >= FACE_MATCH_THRESHOLD) {
+    if (similarity >= RECOGNITION_THRESHOLD) {
       matches.push({
         uuid: item.uuid,
         name: item.name,
@@ -126,24 +174,47 @@ const findMatchesInBatches = async queryEmbedding => {
 };
 
 const oldLinearSearch = async embedding => {
-  const matches = [];
-  let bestScore = 0;
-
   const vectors = VECTOR_STORE.data;
+  const matches = [];
+
+  let bestScore = 0;
+  let bestMatch = null;
 
   for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
-    const batch = vectors.slice(i, i + BATCH_SIZE);
+    const end = Math.min(i + BATCH_SIZE, vectors.length);
 
-    // Yield to event loop (prevent UI freeze on large DB)
+    // Yield to event loop
     if (i > 0) {
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(r => setTimeout(r, 0));
     }
 
-    for (const item of batch) {
+    for (let j = i; j < end; j++) {
+      const item = vectors[j];
+
       const similarity = cosineSimilarity(embedding, item.parsedVector);
 
-      if (similarity > bestScore) bestScore = similarity;
+      // Track best match
+      if (similarity > bestScore) {
+        bestScore = similarity;
+        bestMatch = item;
 
+        // Early exit if very strong match
+        if (bestScore > 0.92) {
+          return {
+            matches: [
+              {
+                uuid: item.uuid,
+                name: item.name,
+                staffid: item.staffid,
+                similarity: bestScore,
+              },
+            ],
+            bestScore,
+          };
+        }
+      }
+
+      // Add match
       if (similarity >= RECOGNITION_THRESHOLD) {
         matches.push({
           uuid: item.uuid,
@@ -151,11 +222,21 @@ const oldLinearSearch = async embedding => {
           staffid: item.staffid,
           similarity,
         });
+
+        // Stop collecting too many matches
+        if (matches.length >= 10) {
+          return { matches, bestScore };
+        }
       }
     }
+  }
 
-    // Early exit if many matches (no need to scan all)
-    if (matches.length > 10) break;
+  // If no threshold match but bestScore exists
+  if (matches.length === 0 && bestMatch) {
+    return {
+      matches: [],
+      bestScore,
+    };
   }
 
   return { matches, bestScore };
@@ -423,7 +504,7 @@ export const updateFaceService = async ({
 
     console.log('Highest similarity:', highestScore);
 
-    if (highestScore >= FACE_MATCH_THRESHOLD) {
+    if (highestScore >= ENROLLMENT_DUPLICATE_THRESHOLD) {
       console.warn('Duplicate face detected');
       return {
         status: 'duplicate',
@@ -484,6 +565,12 @@ export const updateFaceService = async ({
       VECTOR_STORE.data.push(updatedVector);
       console.log('Vector added to cache');
     }
+
+    const newVersion = Date.now();
+
+    await AsyncStorage.setItem(VECTOR_VERSION_KEY, String(newVersion));
+
+    VECTOR_STORE.lastUpdated = newVersion;
 
     // ensureHNSWIndex(Date.now());
 
