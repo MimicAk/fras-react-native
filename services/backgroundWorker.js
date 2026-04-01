@@ -4,6 +4,7 @@ import { AppState } from 'react-native';
 
 import {
   runBackgroundSync,
+  runVectorPullSync,
   syncVectorBackground,
 } from './backgroundSync.service';
 // import { startLoggerEngine } from './logger.service';
@@ -47,20 +48,20 @@ export const initBackgroundFetch = async userToken => {
 let foregroundInterval = null;
 
 export const startForegroundSyncService = (userToken, user) => {
-
   // Sync immediately when internet returns
   NetInfo.addEventListener(state => {
-    if (state.isConnected) runBackgroundSync(userToken);
+    if (state.isConnected) {
+      runBackgroundSync(userToken);
+      startVectorPullBackground(userToken, user?.guid);
+    }
   });
 
-
-  console.log(user);
-  
   // Sync immediately when app is brought back to the screen
   AppState.addEventListener('change', state => {
     if (state === 'active') {
       runBackgroundSync(userToken);
       syncVectorBackground(userToken, user?.guid);
+      // startVectorPullBackground(userToken, user?.guid);
       // startLoggerEngine(userToken);
     }
   });
@@ -71,6 +72,29 @@ export const startForegroundSyncService = (userToken, user) => {
     foregroundInterval = setInterval(() => {
       runBackgroundSync(userToken);
       syncVectorBackground(userToken, user?.guid);
-    }, 1 * 60 * 500);
+    }, 1 * 60 * 1000);
+
+    startVectorPullBackground(userToken, user?.guid);
+  }
+};
+
+/* ======================================================
+   VECTOR PULL BACKGROUND RUNNER (6 HOURS)
+====================================================== */
+
+let vectorPullInterval = null;
+
+export const startVectorPullBackground = (userToken, userGuid) => {
+  console.log('🚀 Vector Pull Background Started');
+
+  // Run once immediately
+  runVectorPullSync(userToken, userGuid);
+
+  if (vectorPullInterval) return;
+  // Run every 6 hours
+  if (!vectorPullInterval) {
+    vectorPullInterval = setInterval(() => {
+      runVectorPullSync(userToken, userGuid);
+    }, 20 * 60 * 1000); 
   }
 };

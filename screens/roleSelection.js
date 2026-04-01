@@ -1,5 +1,5 @@
 // screens/RoleSelectionScreen.js
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react'; // Added useRef
 import {
   View,
   Text,
@@ -9,69 +9,123 @@ import {
   FlatList,
   Alert,
 } from 'react-native';
-import { LogOut } from 'lucide-react-native';
+import { LogOut, ChevronRight } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../AuthContext';
 
 export default function RoleSelectionScreen({ navigation }) {
   const { user, logout } = useAuth();
+  const hasNavigated = useRef(false); // Ref to prevent multiple navigation attempts
+
+  console.log(user);
 
   useEffect(() => {
-    // Auto-select if user has exactly one role
+    // Check if we already handled the auto-selection to prevent loops
+    if (hasNavigated.current) return;
+
     if (user?.roles?.length === 1) {
       const singleRole = user.roles[0];
-      handleSelectRole(singleRole?.guid);
+      if (singleRole?.guid) {
+        hasNavigated.current = true; // Mark as navigating
+        handleSelectRole(singleRole.guid);
+      }
     }
   }, [user]);
 
-  const handleSelectRole = async (roleGuid) => {
+  const handleSelectRole = async roleGuid => {
     if (!roleGuid) return;
 
     try {
       await AsyncStorage.setItem('AttendanceType', roleGuid);
-      navigation.replace('LandingPage');
+      // Use setImmediate or a small timeout to ensure the effect has finished
+      // and prevent "Already navigating" errors
+      setTimeout(() => {
+        navigation.replace('LandingPage');
+      }, 0);
     } catch (err) {
+      hasNavigated.current = false; // Reset on error so user can try again
       Alert.alert('Error', 'Failed to save role selection. Please try again.');
     }
   };
 
   const handleLogout = () => {
     logout();
+
+    setTimeout(() => {
+      navigation.replace('Login');
+    }, 1000);
   };
 
-  const renderRoleItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.roleCard}
-      onPress={() => handleSelectRole(item?.guid)}
-      activeOpacity={0.8}
-    >
-      <Image
-        source={
-          item?.roleimage
-            ? { uri: item.roleimage }
-            : require('../assets/images/placeholder-role.png') // fallback image
-        }
-        style={styles.roleIcon}
-        resizeMode="contain"
-      />
+  // Helper to safely render roles
+  const getPermissions = permString => {
+    try {
+      const parsed = JSON.parse(permString);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  };
 
-      <View style={styles.cardContent}>
-        <Text style={styles.roleName} numberOfLines={1}>
-          {item?.rolename?.trim() || 'Unnamed Role'}
-        </Text>
-        <Text style={styles.roleDesc} numberOfLines={2}>
-          {item?.roledesc?.trim() || 'No description available'}
-        </Text>
+  const renderRoleItem = ({ item }) => {
+    return (
+      <TouchableOpacity
+        style={styles.roleCard}
+        onPress={() => handleSelectRole(item?.guid)}
+        activeOpacity={0.8}
+      >
+        {/* --- AVATAR & STATUS --- */}
+        <View style={styles.iconContainer}>
+          {item?.roleimage ? (
+            <Image
+              source={{ uri: item.roleimage }}
+              style={styles.roleIcon}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={styles.roleCodeFallback}>
+              <Text style={styles.roleCodeText}>
+                {item?.rolecode || item?.rolename?.charAt(0) || '?'}
+              </Text>
+            </View>
+          )}
+
+          {/* Active Status Dot */}
+          {item?.isactive && <View style={styles.activeDot} />}
+        </View>
+
+        {/* --- CONTENT --- */}
+        <View style={styles.cardContent}>
+          <Text style={styles.roleName} numberOfLines={1}>
+            {item?.rolename?.trim() || 'Unnamed Role'}
+          </Text>
+          <Text style={styles.roleDesc} numberOfLines={2}>
+            {item?.roledesc?.trim() || 'No description available'}
+          </Text>
+        </View>
+
+        {/* --- ACTION ICON --- */}
+        <ChevronRight size={20} color="#CBD5E1" />
+      </TouchableOpacity>
+    );
+  };
+
+  // Guard: If user is null/loading, show nothing or a loader to prevent crashes
+  if (!user) {
+    return (
+      <View style={styles.container}>
+        <Text>Loading...</Text>
       </View>
-    </TouchableOpacity>
-  );
+    );
+  }
 
   // No roles → show message + logout
   if (!user?.roles || user.roles.length === 0) {
     return (
       <View style={styles.container}>
         <Image
-          source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/7/71/Arabic_Calligraphy_Logo.png' }}
+          source={{
+            uri: 'https://upload.wikimedia.org/wikipedia/commons/7/71/Arabic_Calligraphy_Logo.png',
+          }}
           style={styles.logo}
           resizeMode="contain"
         />
@@ -92,13 +146,14 @@ export default function RoleSelectionScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* Logout button (top-right) */}
       <TouchableOpacity style={styles.logoutTop} onPress={handleLogout}>
         <LogOut size={22} color="#64748B" />
       </TouchableOpacity>
 
       <Image
-        source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/7/71/Arabic_Calligraphy_Logo.png' }}
+        source={{
+          uri: 'https://upload.wikimedia.org/wikipedia/commons/7/71/Arabic_Calligraphy_Logo.png',
+        }}
         style={styles.logo}
         resizeMode="contain"
       />
@@ -111,7 +166,8 @@ export default function RoleSelectionScreen({ navigation }) {
       <FlatList
         data={user.roles}
         renderItem={renderRoleItem}
-        keyExtractor={(item) => item?.guid || item?.id || Math.random().toString()}
+        keyExtractor={(item, index) => item?.guid || index.toString()}
+        style={{ width: '100%' }}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
@@ -156,39 +212,6 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingBottom: 40,
   },
-  roleCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    padding: 18,
-    marginVertical: 8,
-    borderRadius: 16,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-  },
-  roleIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-  },
-  cardContent: {
-    flex: 1,
-    marginLeft: 16,
-  },
-  roleName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#0F172A',
-  },
-  roleDesc: {
-    fontSize: 13,
-    color: '#64748B',
-    marginTop: 4,
-    lineHeight: 18,
-  },
   logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -203,5 +226,72 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginLeft: 12,
+  },
+
+  roleCard: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    width: '100%', // Forces full width
+    // Shadow for iOS
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    // Elevation for Android
+    elevation: 3,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F1F5F9', // Very subtle border for crispness
+  },
+  iconContainer: {
+    position: 'relative',
+    marginRight: 16,
+  },
+  roleIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 16, // Squircle look (or make it 27 for a perfect circle)
+  },
+  roleCodeFallback: {
+    width: 54,
+    height: 54,
+    borderRadius: 16,
+    backgroundColor: '#EEF2FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  roleCodeText: {
+    color: '#4F46E5',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  activeDot: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#10B981',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  cardContent: {
+    flex: 1, // Pushes the Chevron to the far right
+    justifyContent: 'center',
+  },
+  roleName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 4,
+  },
+  roleDesc: {
+    fontSize: 14,
+    color: '#64748B',
+    lineHeight: 20,
   },
 });

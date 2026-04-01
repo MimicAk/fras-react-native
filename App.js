@@ -26,7 +26,7 @@ function AppContent() {
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="LandingPage" component={LandingPage} />
       <Stack.Screen name="SyncData" component={SyncData} />
-      <Stack.Screen name="RoleSection" component={RoleSelectionScreen} />
+      <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
       <Stack.Screen name="Employees" component={EmployeesScreen} />
       <Stack.Screen name="FaceEnrollmentScreen" component={FaceEnrollmentScreen} />
     </Stack.Navigator>

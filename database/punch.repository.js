@@ -21,62 +21,62 @@ export const recordPunch = async (db, punchData) => {
   const currentDate = today();
 
   /* ---------- CHECK IN VALIDATION ---------- */
-  if (punchType === 'in') {
-    const activeCheckIn = await fetchOne(
-      db,
-      `
-      SELECT id FROM punchrecord
-      WHERE uuid = ?
-        AND attendancetype = ?
-        AND punchtype = 'in'
-        AND date(punchdate) = date(?)
-        AND NOT EXISTS (
-          SELECT 1 FROM punchrecord p2
-          WHERE p2.uuid = punchrecord.uuid
-            AND p2.attendancetype = punchrecord.attendancetype
-            AND p2.punchtype = 'out'
-            AND date(p2.punchdate) = date(punchrecord.punchdate)
-        )
-      `,
-      [punchData.uuid, punchData.attendanceType || '', currentDate],
-    );
+  // if (punchType === 'in') {
+  //   const activeCheckIn = await fetchOne(
+  //     db,
+  //     `
+  //     SELECT id FROM punchrecord
+  //     WHERE uuid = ?
+  //       AND attendancetype = ?
+  //       AND punchtype = 'in'
+  //       AND date(punchdate) = date(?)
+  //       AND NOT EXISTS (
+  //         SELECT 1 FROM punchrecord p2
+  //         WHERE p2.uuid = punchrecord.uuid
+  //           AND p2.attendancetype = punchrecord.attendancetype
+  //           AND p2.punchtype = 'out'
+  //           AND date(p2.punchdate) = date(punchrecord.punchdate)
+  //       )
+  //     `,
+  //     [punchData.uuid, punchData.attendanceType || '', currentDate],
+  //   );
 
-    if (activeCheckIn) {
-      throw new Error('Please checkout first');
-    }
-  }
+  //   if (activeCheckIn) {
+  //     throw new Error('Please checkout first');
+  //   }
+  // }
 
   /* ---------- CHECK OUT VALIDATION ---------- */
-  if (punchType === 'out') {
-    const activeCheckIn = await fetchOne(
-      db,
-      `
-      SELECT id FROM punchrecord
-      WHERE uuid = ?
-        AND attendancetype = ?
-        AND projectid = ?
-        AND punchtype = 'in'
-        AND date(punchdate) = date(?)
-        AND NOT EXISTS (
-          SELECT 1 FROM punchrecord p2
-          WHERE p2.uuid = punchrecord.uuid
-            AND p2.projectid = punchrecord.projectid
-            AND p2.punchtype = 'out'
-            AND date(p2.punchdate) = date(punchrecord.punchdate)
-        )
-      `,
-      [
-        punchData.uuid,
-        punchData.attendanceType || '',
-        punchData.projectID || '',
-        currentDate,
-      ],
-    );
+  // if (punchType === 'out') {
+  //   const activeCheckIn = await fetchOne(
+  //     db,
+  //     `
+  //     SELECT id FROM punchrecord
+  //     WHERE uuid = ?
+  //       AND attendancetype = ?
+  //       AND projectid = ?
+  //       AND punchtype = 'in'
+  //       AND date(punchdate) = date(?)
+  //       AND NOT EXISTS (
+  //         SELECT 1 FROM punchrecord p2
+  //         WHERE p2.uuid = punchrecord.uuid
+  //           AND p2.projectid = punchrecord.projectid
+  //           AND p2.punchtype = 'out'
+  //           AND date(p2.punchdate) = date(punchrecord.punchdate)
+  //       )
+  //     `,
+  //     [
+  //       punchData.uuid,
+  //       punchData.attendanceType || '',
+  //       punchData.projectID || '',
+  //       currentDate,
+  //     ],
+  //   );
 
-    if (!activeCheckIn) {
-      throw new Error('No active check-in found');
-    }
-  }
+  //   if (!activeCheckIn) {
+  //     throw new Error('No active check-in found');
+  //   }
+  // }
 
   const recordId = uuidv4();
 

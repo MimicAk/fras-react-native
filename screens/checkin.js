@@ -27,6 +27,8 @@ import { SwitchCamera } from 'lucide-react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SoundPlayer from 'react-native-sound-player';
+
+import ImageResizer from 'react-native-image-resizer';
 import RNFS from 'react-native-fs';
 
 import { connectToDatabase } from '../database/connection';
@@ -40,7 +42,11 @@ import SmallAlert from '../components/AttendanceComps/SmallAlert';
 import {
   loadVectorsService,
   recognizeFaceService,
+  improveFaceModelService,
+  normalizeVector,
+  setCurrentUser
 } from '../services/face.service';
+
 import {
   processCheckInService,
   processCheckoutAndCheckinService,
@@ -51,6 +57,7 @@ import FaceConfirmationPopup from '../components/AttendanceComps/FaceConfirmatio
 import MultipleMatchPopup from '../components/AttendanceComps/MultipleMatchPopup';
 
 import { useAuth } from '../AuthContext';
+import { getFaceEmbeddingFromImage } from '../utils/FaceRecognitionUtil';
 
 const { width, height } = Dimensions.get('window');
 
@@ -64,6 +71,7 @@ function CheckInScreen({
 
   const { user } = useAuth();
 
+  setCurrentUser(user?.id);
   const successSound = require('../assets/sounds/success.mp3');
   const warningSound = require('../assets/sounds/warning.mp3');
 
@@ -101,6 +109,8 @@ function CheckInScreen({
   const [manualEmpId, setManualEmpId] = useState('');
   const [manualPhoto, setManualPhoto] = useState(null);
 
+  const [capturedEmbedding, setCapturedEmbedding] = useState(null);
+
   const cameraRef = useRef(null);
   const captureInterval = useRef(null);
   const isProcessing = useRef(false);
@@ -118,15 +128,40 @@ function CheckInScreen({
   };
 
   // HELPER: PROCESS PHOTO TO BASE64
+  // HELPER: PROCESS AND RESIZE PHOTO TO BASE64
   const processPhotoToBase64 = async photoObj => {
     if (!photoObj || !photoObj.path) return null;
+
     try {
-      const imagePath = photoObj.path.startsWith('file://')
+      // 1. Ensure correct path format for the original image
+      const originalPath = photoObj.path.startsWith('file://')
         ? photoObj.path
         : `file://${photoObj.path}`;
-      return await RNFS.readFile(imagePath, 'base64');
+
+      // 2. Resize the image
+      // Parameters: path, maxWidth, maxHeight, format, quality (0-100), rotation
+      // 800x800 at 80% quality is usually the sweet spot for accurate face recognition without bloat
+      const resizedImage = await ImageResizer.createResizedImage(
+        originalPath,
+        500,
+        500,
+        'JPEG',
+        70,
+        0,
+        null, // null defaults to a temporary cache directory
+      );
+
+      // 3. Read the newly resized, lightweight image into Base64
+      const base64String = await RNFS.readFile(resizedImage.uri, 'base64');
+
+      // 4. (Optional but recommended) Clean up the cached resized image to save storage
+      RNFS.unlink(resizedImage.uri).catch(err =>
+        console.log('Failed to clean up resized image cache:', err),
+      );
+
+      return base64String;
     } catch (err) {
-      console.error('Base64 Processing Error:', err);
+      console.error('Image Resizing / Base64 Processing Error:', err);
       return null;
     }
   };
@@ -140,12 +175,12 @@ function CheckInScreen({
         const database = await connectToDatabase();
         await createTables(database);
         await loadVectorsService(database);
+        setInitialized(true);
         setDb(database);
 
         const projectJson = await AsyncStorage.getItem('Project');
         setCurrentProject(projectJson ? JSON.parse(projectJson) : null);
 
-        setInitialized(true);
       } catch (err) {
         console.error('Init failed:', err);
         setErrorMsg('Failed to initialize. Please restart the app.');
@@ -179,6 +214,12 @@ function CheckInScreen({
 
   // AUTO CAPTURE INTERVAL
   useEffect(() => {
+    const isPopupOpen =
+      showConfirmation ||
+      showActivePopup ||
+      matchedPersons.length > 0 ||
+      showManualModal;
+
     if (
       !isFocused ||
       !initialized ||
@@ -186,8 +227,14 @@ function CheckInScreen({
       hasPermission !== true ||
       !device ||
       !cameraReady ||
-      isManualMode
+      isManualMode ||
+      isPopupOpen
     ) {
+      if (captureInterval.current) {
+        clearInterval(captureInterval.current);
+        captureInterval.current = null;
+      }
+
       return;
     }
 
@@ -231,7 +278,12 @@ function CheckInScreen({
       }
 
       if (faceResult.status === 'multiple') {
-        setMatchedPersons(faceResult.matches);
+        setMatchedPersons(
+          faceResult.matches.map(m => ({
+            ...m,
+            embedding: faceResult.embedding,
+          })),
+        );
         return;
       }
 
@@ -246,9 +298,10 @@ function CheckInScreen({
         }
 
         setPendingPerson(faceResult.employee);
+        setCapturedEmbedding(faceResult.embedding);
 
         console.log(faceResult.employee);
-        
+
         setShowConfirmation(true);
         return;
       }
@@ -325,6 +378,23 @@ function CheckInScreen({
         } catch {}
         setTimeout(() => setEmpID(null), 5000);
         return;
+      }
+
+      const base64Image = await processPhotoToBase64(manualPhoto);
+
+      const embedding = await getFaceEmbeddingFromImage(
+        manualPhoto.path,
+        cameraPosition,
+      );
+
+      if (embedding) {
+        improveFaceModelService({
+          db,
+          staffId: serviceResult.employee.staffid,
+          uuid: serviceResult.employee.uuid,
+          newEmbedding: normalizeVector(embedding),
+          base64Image,
+        });
       }
 
       if (serviceResult.status === 'already_checkedin') {
@@ -572,6 +642,7 @@ function CheckInScreen({
         onSelect={person => {
           setMatchedPersons([]);
           setPendingPerson(person);
+          setCapturedEmbedding(person.embedding);
           setShowConfirmation(true);
         }}
         onCancel={() => setMatchedPersons([])}
@@ -581,60 +652,93 @@ function CheckInScreen({
       <FaceConfirmationPopup
         visible={showConfirmation}
         employee={pendingPerson}
-        onConfirm={async () => {
+        onConfirm={() => {
+          setEmpID(pendingPerson);
+          setIsWorking(true);
+
+          try {
+            SoundPlayer.playAsset(successSound);
+          } catch {}
+
           setShowConfirmation(false);
+          // setIsWorking(true);
 
-          const base64Image = await processPhotoToBase64(autoPhoto);
-
-          const serviceResult = await processCheckInService({
-            db,
-            faceResult: {
-              employee: pendingPerson,
-            },
-            currentLocation,
-            nearyByProject,
-            currentProject,
-            attendanceType,
-            user,
-            userimage: base64Image,
-          });
-
-          if (serviceResult.status === 'success') {
-            setEmpID(serviceResult.employee);
+          setTimeout(async () => {
             try {
-              SoundPlayer.playAsset(successSound);
-            } catch {}
-            setTimeout(() => setEmpID(null), 5000);
-            return;
-          }
+              const base64Image = await processPhotoToBase64(autoPhoto);
 
-          if (serviceResult.status === 'already_checkedin') {
-            try {
-              SoundPlayer.playAsset(warningSound);
-            } catch {}
-            setAlertConfig({
-              visible: true,
-              type: 'error',
-              message: serviceResult.message,
-            });
-            setTimeout(() => {
-              setAlertConfig(prev => ({ ...prev, visible: false }));
-            }, 3000);
-            return;
-          }
+              const serviceResult = await processCheckInService({
+                db,
+                faceResult: {
+                  employee: pendingPerson,
+                },
+                currentLocation,
+                nearyByProject,
+                currentProject,
+                attendanceType,
+                user,
+                userimage: base64Image,
+              });
 
-          if (serviceResult.status === 'active_checkin') {
-            try {
-              SoundPlayer.playAsset(warningSound);
-            } catch {}
-            setPendingPerson(serviceResult.employee);
-            setActiveDetails(serviceResult.details);
-            setShowActivePopup(true);
-            return;
-          }
+              if (serviceResult.status === 'success') {
+                // setEmpID(serviceResult.employee);
+                // try {
+                //   SoundPlayer.playAsset(successSound);
+                // } catch {}
 
-          setErrorMsg(serviceResult.message);
-          setTimeout(() => setErrorMsg(null), 5000);
+                // Trigger background face improvement (Fire and forget)
+                if (capturedEmbedding && autoPhoto) {
+                  improveFaceModelService({
+                    db,
+                    staffId: pendingPerson.staffid,
+                    uuid: pendingPerson.uuid,
+                    newEmbedding: capturedEmbedding,
+                    base64Image: base64Image,
+                  }).catch(err =>
+                    console.log('Background learning failed', err),
+                  );
+                }
+
+                setTimeout(() => setEmpID(null), 3000);
+                return;
+              }
+
+              if (serviceResult.status === 'already_checkedin') {
+                try {
+                  SoundPlayer.playAsset(warningSound);
+                } catch {}
+                setAlertConfig({
+                  visible: true,
+                  type: 'error',
+                  message: serviceResult.message,
+                });
+                setTimeout(() => {
+                  setAlertConfig(prev => ({ ...prev, visible: false }));
+                }, 3000);
+                return;
+              }
+
+              if (serviceResult.status === 'active_checkin') {
+                try {
+                  SoundPlayer.playAsset(warningSound);
+                } catch {}
+                setPendingPerson(serviceResult.employee);
+                setActiveDetails(serviceResult.details);
+                setShowActivePopup(true);
+                return;
+              }
+
+              setErrorMsg(serviceResult.message);
+              setTimeout(() => setErrorMsg(null), 3000);
+            } catch (err) {
+              console.error('Checkin Error:', err);
+              setErrorMsg('An error occurred during check-in.');
+              setTimeout(() => setErrorMsg(null), 3000);
+            } finally {
+              // 3. Turn off loading spinner
+              setIsWorking(false);
+            }
+          }, 150);
         }}
         onCancel={() => setShowConfirmation(false)}
       />

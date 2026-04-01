@@ -127,41 +127,41 @@ export const processCheckInService = async ({
 
     /* ---------------- Check Duplicate Today ---------------- */
 
-    const alreadyCheckedIn = await checkTodayPunch(
-      db,
-      person.uuid,
-      'in',
-      projectID,
-      attendanceType,
-    );
+    // const alreadyCheckedIn = await checkTodayPunch(
+    //   db,
+    //   person.uuid,
+    //   'in',
+    //   projectID,
+    //   attendanceType,
+    // );
 
-    if (alreadyCheckedIn) {
-      return {
-        status: 'already_checkedin',
-        message: 'Already checked in today',
-      };
-    }
+    // if (alreadyCheckedIn) {
+    //   return {
+    //     status: 'already_checkedin',
+    //     message: 'Already checked in today',
+    //   };
+    // }
 
     /* ---------------- Check Active Checkin (Other Project) ---------------- */
 
-    const activeCheckin = await getActiveCheckIn(
-      db,
-      person.uuid,
-      attendanceType,
-    );
+    // const activeCheckin = await getActiveCheckIn(
+    //   db,
+    //   person.uuid,
+    //   attendanceType,
+    // );
 
-    if (activeCheckin) {
-      return {
-        status: 'active_checkin',
-        employee: person,
-        details: {
-          activeCheckin,
-          newProject: {
-            guid: projectID,
-          },
-        },
-      };
-    }
+    // if (activeCheckin) {
+    //   return {
+    //     status: 'active_checkin',
+    //     employee: person,
+    //     details: {
+    //       activeCheckin,
+    //       newProject: {
+    //         guid: projectID,
+    //       },
+    //     },
+    //   };
+    // }
 
     /* ---------------- Perform Check-in ---------------- */
 
@@ -229,37 +229,42 @@ export const processCheckOutService = async ({
 
     const person = faceResult.employee;
 
+    const projectID = resolveProjectId({
+      nearyByProject,
+      currentProject,
+    });
+
     /* ---------------- Get Active Checkin ---------------- */
 
-    const activeCheckin = await getActiveCheckIn(
-      db,
-      person.uuid,
-      attendanceType,
-    );
+    // const activeCheckin = await getActiveCheckIn(
+    //   db,
+    //   person.uuid,
+    //   attendanceType,
+    // );
 
-    if (!activeCheckin) {
-      return {
-        status: 'no_active_checkin',
-        message: 'No active check-in found',
-      };
-    }
+    // if (!activeCheckin) {
+    //   return {
+    //     status: 'no_active_checkin',
+    //     message: 'No active check-in found',
+    //   };
+    // }
 
     /* ---------------- Prevent Duplicate Checkout ---------------- */
 
-    const alreadyCheckedOut = await checkTodayPunch(
-      db,
-      person.uuid,
-      'out',
-      activeCheckin.projectid,
-      attendanceType,
-    );
+    // const alreadyCheckedOut = await checkTodayPunch(
+    //   db,
+    //   person.uuid,
+    //   'out',
+    //   activeCheckin.projectid,
+    //   attendanceType,
+    // );
 
-    if (alreadyCheckedOut) {
-      return {
-        status: 'already_checkedout',
-        message: 'Already checked out today',
-      };
-    }
+    // if (alreadyCheckedOut) {
+    //   return {
+    //     status: 'already_checkedout',
+    //     message: 'Already checked out today',
+    //   };
+    // }
 
     /* ---------------- Perform Checkout ---------------- */
 
@@ -269,7 +274,7 @@ export const processCheckOutService = async ({
       lat: currentLocation?.latitude || '',
       lan: currentLocation?.longitude || '',
       attendanceType,
-      projectID: activeCheckin.projectid,
+      projectID: projectID,
       punchMode: 'offline',
       isManual, // <-- Passed to repo
       userimage, // <-- Passed to repo
@@ -278,7 +283,7 @@ export const processCheckOutService = async ({
     return {
       status: 'success',
       employee: person,
-      checkedOutFrom: activeCheckin.projectid,
+      checkedOutFrom: projectID,
     };
   } catch (error) {
     return {
@@ -346,26 +351,25 @@ export const processCheckoutAndCheckinService = async ({
   }
 };
 
-
 /* =====================================================
    MANUAL ENTRY SERVICE
 ===================================================== */
 export const manualEntryService = async ({
   db,
   manualEmpId,
-  punchType, 
+  punchType,
   currentLocation,
   nearyByProject,
   currentProject,
   attendanceType,
   user,
-  photo // <-- ADDED: The photo object from vision camera
+  photo, // <-- ADDED: The photo object from vision camera
 }) => {
   try {
     // Check local database for the employee
     const results = await db.executeSql(
-      `SELECT * FROM facevector WHERE staffid = ? LIMIT 1`, 
-      [manualEmpId]
+      `SELECT * FROM facevector WHERE staffid = ? LIMIT 1`,
+      [manualEmpId],
     );
 
     if (results[0].rows.length > 0) {
@@ -375,10 +379,12 @@ export const manualEntryService = async ({
       let base64String = null;
       if (photo && photo.path) {
         // Make sure the path is properly formatted for RNFS
-        const imagePath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
+        const imagePath = photo.path.startsWith('file://')
+          ? photo.path
+          : `file://${photo.path}`;
         base64String = await RNFS.readFile(imagePath, 'base64');
       }
-      
+
       let serviceResult;
 
       if (punchType === 'out') {
@@ -391,7 +397,7 @@ export const manualEntryService = async ({
           currentProject,
           attendanceType,
           user,
-          isManual: 1, 
+          isManual: 1,
           userimage: base64String, // <-- Passed Down
         });
       } else {
@@ -410,12 +416,90 @@ export const manualEntryService = async ({
       }
 
       // Pass the employee object back along with the status
-      return { ...serviceResult, employee }; 
+      return { ...serviceResult, employee };
     } else {
-      return { status: 'not_found', message: 'Employee ID not found in the local database.' };
+      return {
+        status: 'not_found',
+        message: 'Employee ID not found in the local database.',
+      };
     }
   } catch (err) {
     console.error('Manual DB Error:', err);
     return { status: 'db_error', message: 'Database query failed.' };
   }
 };
+
+export const formatCheckIn = punch => ({
+  guid: punch.id,
+  emp_id: punch.uuid,
+  project_id: punch.projectid,
+  attendance_type: punch.attendancetype,
+  date: punch.punchdate.split('T')[0],
+
+  checkin_time: punch.punchdate,
+  checkout_time: null,
+
+  checkin_lat: punch.lat,
+  checkin_lang: punch.lan,
+
+  checkout_lat: null,
+  checkout_lang: null,
+
+  checkin_is_manual: punch.ismanual,
+  checkout_is_manual: 0,
+
+  checkin_image: punch.userimage,
+  checkout_image: null,
+
+  local_ids: [punch.id],
+});
+
+export const formatCheckOut = punch => ({
+  guid: punch.id,
+  emp_id: punch.uuid,
+  project_id: punch.projectid,
+  attendance_type: punch.attendancetype,
+  date: punch.punchdate.split('T')[0],
+
+  checkin_time: null,
+  checkout_time: punch.punchdate,
+
+  checkin_lat: null,
+  checkin_lang: null,
+
+  checkout_lat: punch.lat,
+  checkout_lang: punch.lan,
+
+  checkin_is_manual: 0,
+  checkout_is_manual: punch.ismanual,
+
+  checkin_image: null,
+  checkout_image: punch.userimage,
+
+  local_ids: [punch.id],
+});
+
+export const formatPair = (checkIn, checkOut) => ({
+  guid: checkIn.id,
+  emp_id: checkIn.uuid,
+  project_id: checkIn.projectid,
+  attendance_type: checkIn.attendancetype,
+  date: checkIn.punchdate.split('T')[0],
+
+  checkin_time: checkIn.punchdate,
+  checkout_time: checkOut.punchdate,
+
+  checkin_lat: checkIn.lat,
+  checkin_lang: checkIn.lan,
+
+  checkout_lat: checkOut.lat,
+  checkout_lang: checkOut.lan,
+
+  checkin_is_manual: checkIn.ismanual,
+  checkout_is_manual: checkOut.ismanual,
+
+  checkin_image: checkIn.userimage,
+  checkout_image: checkOut.userimage,
+
+  local_ids: [checkIn.id, checkOut.id],
+});

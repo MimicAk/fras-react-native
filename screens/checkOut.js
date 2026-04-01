@@ -38,11 +38,14 @@ import SmallAlert from '../components/AttendanceComps/SmallAlert';
 import {
   loadVectorsService,
   recognizeFaceService,
+  setCurrentUser
 } from '../services/face.service';
 import {
   processCheckOutService,
   manualEntryService,
 } from '../services/attendance.service';
+
+import ImageResizer from 'react-native-image-resizer';
 
 import FaceConfirmationPopup from '../components/AttendanceComps/FaceConfirmationPopup';
 import MultipleMatchPopup from '../components/AttendanceComps/MultipleMatchPopup';
@@ -59,6 +62,8 @@ function CheckOutScreen({
 }) {
   const isFocused = useIsFocused();
   const { user } = useAuth();
+
+  setCurrentUser(user?.id);
 
   const successSound = require('../assets/sounds/success.mp3');
   const warningSound = require('../assets/sounds/warning.mp3');
@@ -111,15 +116,40 @@ function CheckOutScreen({
   };
 
   // HELPER: PROCESS PHOTO TO BASE64
+  // HELPER: PROCESS AND RESIZE PHOTO TO BASE64
   const processPhotoToBase64 = async photoObj => {
     if (!photoObj || !photoObj.path) return null;
+
     try {
-      const imagePath = photoObj.path.startsWith('file://')
+      // 1. Ensure correct path format for the original image
+      const originalPath = photoObj.path.startsWith('file://')
         ? photoObj.path
         : `file://${photoObj.path}`;
-      return await RNFS.readFile(imagePath, 'base64');
+
+      // 2. Resize the image
+      // Parameters: path, maxWidth, maxHeight, format, quality (0-100), rotation
+      // 800x800 at 80% quality is usually the sweet spot for accurate face recognition without bloat
+      const resizedImage = await ImageResizer.createResizedImage(
+        originalPath,
+        500,
+        500,
+        'JPEG',
+        70,
+        0,
+        null, // null defaults to a temporary cache directory
+      );
+
+      // 3. Read the newly resized, lightweight image into Base64
+      const base64String = await RNFS.readFile(resizedImage.uri, 'base64');
+
+      // 4. (Optional but recommended) Clean up the cached resized image to save storage
+      RNFS.unlink(resizedImage.uri).catch(err =>
+        console.log('Failed to clean up resized image cache:', err),
+      );
+
+      return base64String;
     } catch (err) {
-      console.error('Base64 Processing Error:', err);
+      console.error('Image Resizing / Base64 Processing Error:', err);
       return null;
     }
   };
@@ -172,6 +202,9 @@ function CheckOutScreen({
 
   // AUTO CAPTURE INTERVAL
   useEffect(() => {
+    const isPopupOpen =
+      showConfirmation || matchedPersons.length > 0 || showManualModal;
+
     if (
       !isFocused ||
       !initialized ||
@@ -179,8 +212,14 @@ function CheckOutScreen({
       hasPermission !== true ||
       !device ||
       !cameraReady ||
-      isManualMode
+      isManualMode ||
+      isPopupOpen
     ) {
+      if (captureInterval.current) {
+        clearInterval(captureInterval.current);
+        captureInterval.current = null;
+      }
+
       return;
     }
 
@@ -528,56 +567,77 @@ function CheckOutScreen({
         visible={showConfirmation}
         employee={pendingPerson}
         checkType="out"
-        onConfirm={async () => {
+        onConfirm={() => {
+          // 1. Close modal and show loading spinner immediately
           setShowConfirmation(false);
+          setIsWorking(true);
 
-          const base64Image = await processPhotoToBase64(autoPhoto);
+          setEmpID(pendingPerson);
+          // setIsWorking(true);
 
-          const serviceResult = await processCheckOutService({
-            db,
-            faceResult: {
-              employee: pendingPerson,
-            },
-            currentLocation,
-            nearyByProject,
-            currentProject,
-            attendanceType,
-            user,
-            userimage: base64Image,
-          });
+          try {
+            SoundPlayer.playAsset(successSound);
+          } catch {}
 
-          if (serviceResult.status === 'success') {
-            setEmpID(serviceResult.employee);
+          // 2. Yield thread for UI to render loader
+          setTimeout(async () => {
             try {
-              SoundPlayer.playAsset(successSound);
-            } catch {}
-            setTimeout(() => setEmpID(null), 5000);
-            return;
-          }
+              const base64Image = await processPhotoToBase64(autoPhoto);
 
-          if (
-            serviceResult.status === 'already_checkedout' ||
-            serviceResult.status === 'no_active_checkin'
-          ) {
-            try {
-              SoundPlayer.playAsset(warningSound);
-            } catch {}
+              const serviceResult = await processCheckOutService({
+                db,
+                faceResult: {
+                  employee: pendingPerson,
+                },
+                currentLocation,
+                nearyByProject,
+                currentProject,
+                attendanceType,
+                user,
+                userimage: base64Image,
+              });
 
-            setAlertConfig({
-              visible: true,
-              type: 'error',
-              message: serviceResult.message,
-            });
+              if (serviceResult.status === 'success') {
+                // setEmpID(serviceResult.employee);
+                // try {
+                //   SoundPlayer.playAsset(successSound);
+                // } catch {}
+                // setTimeout(() => setEmpID(null), 5000);
+                // return;
+              }
 
-            setTimeout(() => {
-              setAlertConfig(prev => ({ ...prev, visible: false }));
-            }, 3000);
+              if (
+                serviceResult.status === 'already_checkedout' ||
+                serviceResult.status === 'no_active_checkin'
+              ) {
+                try {
+                  SoundPlayer.playAsset(warningSound);
+                } catch {}
 
-            return;
-          }
+                setAlertConfig({
+                  visible: true,
+                  type: 'error',
+                  message: serviceResult.message,
+                });
 
-          setErrorMsg(serviceResult.message);
-          setTimeout(() => setErrorMsg(null), 5000);
+                setTimeout(() => {
+                  setAlertConfig(prev => ({ ...prev, visible: false }));
+                }, 3000);
+
+                return;
+              }
+
+              setErrorMsg(serviceResult.message);
+              setTimeout(() => setErrorMsg(null), 5000);
+            } catch (err) {
+              console.error('Check-out Error:', err);
+              setErrorMsg('An error occurred during check-out.');
+              setTimeout(() => setErrorMsg(null), 5000);
+            } finally {
+              // 3. Turn off spinner
+              setIsWorking(false);
+            }
+          }, 150);
         }}
         onCancel={() => setShowConfirmation(false)}
       />

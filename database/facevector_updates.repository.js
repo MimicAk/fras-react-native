@@ -1,17 +1,30 @@
 import { execute, fetchAll, fetchOne } from './helpers';
 
+/* =========================================================
+   ADD FACE UPDATE (AVG + MULTI VECTORS)
+========================================================= */
 export const addFaceUpdate = async (db, data) => {
   return execute(
     db,
     `
     INSERT INTO facevector_updates
-    (uuid, staffid, vector, img, action)
-    VALUES (?, ?, ?, ?, ?)
+    (uuid, staffid, vector, vectors, img, action)
+    VALUES (?, ?, ?, ?, ?, ?)
     `,
-    [data.uuid, data.staffid, data.vector, data.img, data.action || 'update'],
+    [
+      data.uuid,
+      data.staffid,
+      data.vector,    // avg embedding
+      data.vectors,   // 🔥 multi embeddings
+      data.img,
+      data.action || 'update',
+    ],
   );
 };
 
+/* =========================================================
+   GET UNSYNCED FACE UPDATES
+========================================================= */
 export const getUnsyncedFaceUpdates = async db => {
   return fetchAll(
     db,
@@ -21,6 +34,7 @@ export const getUnsyncedFaceUpdates = async db => {
       uuid,
       staffid,
       vector,
+      vectors,
       img,
       action,
       retry_count
@@ -31,6 +45,9 @@ export const getUnsyncedFaceUpdates = async db => {
   );
 };
 
+/* =========================================================
+   MARK FACE UPDATES AS SYNCED
+========================================================= */
 export const markFaceUpdatesSynced = async (db, ids = []) => {
   if (!ids.length) return;
 
@@ -48,6 +65,9 @@ export const markFaceUpdatesSynced = async (db, ids = []) => {
   );
 };
 
+/* =========================================================
+   MARK FACE UPDATE RETRY (ON FAILURE)
+========================================================= */
 export const markFaceUpdateRetry = async (
   db,
   ids = [],
@@ -70,6 +90,9 @@ export const markFaceUpdateRetry = async (
   );
 };
 
+/* =========================================================
+   CLEANUP SYNCED RECORDS
+========================================================= */
 export const cleanupSyncedFaceUpdates = async db => {
   await execute(
     db,

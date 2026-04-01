@@ -20,7 +20,7 @@ function Splash({navigation}){
                     navigation.replace("LandingPage")
                 }else{
                     if(user && user.token != undefined && role == undefined){
-                        navigation.replace("RoleSection")
+                        navigation.replace("RoleSelection")
                     }else{
                         navigation.replace("Login")
                     }

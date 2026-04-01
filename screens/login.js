@@ -56,7 +56,7 @@ export default function LoginScreen({ navigation }) {
 
       await AsyncStorage.removeItem("Project");
       login(user);
-      navigation.replace("RoleSection");
+      navigation.replace("RoleSelection");
     } catch (error) {
       Alert.alert("Login Failed", "Invalid credentials. Please try again.");
     } finally {

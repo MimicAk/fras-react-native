@@ -163,6 +163,8 @@ export default function DashboardScreen({
           logout();
           navigation.navigate('Login');
         }}
+
+        navigation={navigation}
       />
 
       {!isOnline && (

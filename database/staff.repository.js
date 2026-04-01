@@ -14,14 +14,15 @@ export const addStaff = async (db, staffData) => {
     db,
     `
     INSERT OR REPLACE INTO facevector
-    (uuid, staffid, name, vector, img, syncdate, enrollmode, createdby)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    (uuid, staffid, name, vector, vectors, img, syncdate, enrollmode, createdby)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       staffData.uuid,
       staffData.staffid || '',
       staffData.name || '',
-      staffData.vector || 'null',
+      staffData.vector, // avg embedding (REQUIRED)
+      staffData.vectors, // 🔥 multi embeddings (REQUIRED)
       staffData.img || '',
       now(),
       staffData.enrollmode || 'online',
@@ -54,16 +55,35 @@ export const updateStaff = async (db, staffData) => {
 };
 
 /* =========================================================
+   🔥 UPDATE FACE VECTORS (AVG + MULTI)
+   Used after successful recognition (self-learning)
+========================================================= */
+export const updateFaceVectors = async (db, staffid, avg, vectors) => {
+  if (!staffid) {
+    throw new Error('Staff ID required for vector update');
+  }
+
+  return execute(
+    db,
+    `
+    UPDATE facevector
+    SET vector = ?, vectors = ?, syncdate = ?
+    WHERE staffid = ?
+    `,
+    [JSON.stringify(avg), JSON.stringify(vectors), now(), staffid],
+  );
+};
+
+/* =========================================================
    GET ALL STAFF WITH FACE VECTOR
 ========================================================= */
 export const getAllStaff = async db => {
   return fetchAll(
     db,
     `
-    SELECT uuid, staffid, name, vector
+    SELECT uuid, staffid, name, vector, vectors, img
     FROM facevector
-    WHERE vector IS NOT NULL
-      AND vector != 'null'
+    WHERE vectors IS NOT NULL
     `,
   );
 };
@@ -75,7 +95,7 @@ export const searchStaff = async (db, searchTerm) => {
   return fetchAll(
     db,
     `
-    SELECT uuid, staffid, name, vector
+    SELECT uuid, staffid, name, vector, vectors
     FROM facevector
     WHERE staffid LIKE ?
        OR name LIKE ?
@@ -105,7 +125,7 @@ export const getOfflineStaff = async db => {
   return fetchAll(
     db,
     `
-    SELECT uuid, staffid, name, vector, img, syncdate, createdby
+    SELECT uuid, staffid, name, vector, vectors, img, syncdate, createdby
     FROM facevector
     WHERE enrollmode = 'offline'
     `,
@@ -157,7 +177,6 @@ export const deleteStaff = async (db, uuid) => {
   return execute(db, `DELETE FROM facevector WHERE uuid = ?`, [uuid]);
 };
 
-
 /**
  * Get all locally enrolled staff that are NOT synced to server
  * Criteria:
@@ -174,6 +193,7 @@ export const getAllStaffNotSync = async db => {
         staffid,
         name,
         vector,
+        vectors,
         img,
         createdby
       FROM facevector
@@ -187,7 +207,8 @@ export const getAllStaffNotSync = async db => {
       empguid: item.uuid,
       emp_id: item.staffid,
       name: item.name,
-      vector: item.vector,
+      vector: item.vector, // avg embedding
+      vectors: item.vectors, // 🔥 multi embeddings
       image: item.img,
       createdby: item.createdby,
     }));
@@ -195,6 +216,40 @@ export const getAllStaffNotSync = async db => {
     return formatted;
   } catch (error) {
     console.error('[StaffRepo] getAllStaffNotSync error:', error);
+    return [];
+  }
+};
+
+/* =========================================================
+  GET STAFF BY CREATEDBY
+========================================================= */
+export const getStaffByCreatedBy = async (db, createdBy) => {
+  try {
+    // const rows = await fetchAll(
+    //   db,
+    //   `
+    //   SELECT uuid, staffid, name, vector, vectors, img, syncdate, enrollmode, createdby
+    //   FROM facevector
+    //   WHERE createdby = 19389
+    //   `,
+    // );
+    const rows = await fetchAll(
+      db,
+      `
+      SELECT uuid, staffid, name, vector, vectors, img, createdby
+      FROM facevector
+      WHERE vectors IS NOT NULL
+      AND createdby = ?
+      `,
+      [createdBy],
+    );
+
+    
+
+    return rows;
+
+  } catch (error) {
+    console.error('[StaffRepo] getStaffByCreatedBy error:', error);
     return [];
   }
 };

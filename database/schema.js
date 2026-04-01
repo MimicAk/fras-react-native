@@ -39,7 +39,13 @@ export const createTables = async db => {
         uuid TEXT UNIQUE NOT NULL,
         staffid TEXT,
         name TEXT,
+
+        -- 🔹 Existing avg embedding (DO NOT REMOVE)
         vector TEXT,
+
+        -- 🔥 NEW: multiple embeddings (JSON array)
+        vectors TEXT,
+
         img TEXT,
         enrollmode TEXT DEFAULT 'online',
         createdby TEXT,
@@ -53,12 +59,16 @@ export const createTables = async db => {
     ===================================================== */
     await execute(
       db,
-            `
+      `
         CREATE TABLE IF NOT EXISTS facevector_updates (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           uuid TEXT NOT NULL,
           staffid TEXT,
           vector TEXT,
+
+          -- 🔥 NEW: multiple embeddings (JSON array)
+          vectors TEXT,
+
           img TEXT,
           action TEXT DEFAULT 'update', 
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -135,7 +145,7 @@ export const createTables = async db => {
     await execute(
       db,
       `CREATE INDEX IF NOT EXISTS idx_facevector_updates_sync
-      ON facevector_updates(sync_status)`
+      ON facevector_updates(sync_status)`,
     );
 
     console.log('Database schema initialized successfully 🚀');

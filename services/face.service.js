@@ -1,7 +1,11 @@
 // services/face.service.js
 
 import { addFaceUpdate } from '../database/facevector_updates.repository';
-import { getAllStaff, addStaff } from '../database/staff.repository';
+import {
+  getAllStaff,
+  addStaff,
+  getStaffByCreatedBy,
+} from '../database/staff.repository';
 import {
   getFaceEmbeddingFromImage,
   compressBase64Image,
@@ -13,12 +17,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // ────────────────────────────────────────────────
 //  CONFIGURATION
 // ────────────────────────────────────────────────
-// const FACE_MATCH_THRESHOLD = 0.60;
+const FACE_MATCH_THRESHOLD = 0.6;
 
-const RECOGNITION_THRESHOLD = 0.5; //FOR DAILY CHECKIN & CHECKOUT
-const ENROLLMENT_DUPLICATE_THRESHOLD = 0.45; // FOR DUPLICATE CHECKS
+const RECOGNITION_THRESHOLD = 0.55; //FOR DAILY CHECKIN & CHECKOUT
+const ENROLLMENT_DUPLICATE_THRESHOLD = 0.75; // FOR DUPLICATE CHECKS
 const TEMPLATE_UPDATE_THRESHOLD = 0.6; // DAILY SUCCESSFULL CHECKIN UPDATE
-const BATCH_SIZE = 2000;
+const BATCH_SIZE = 3500;
 
 // VECTOR STORAGE KEY
 const VECTOR_VERSION_KEY = 'FACE_VECTOR_VERSION';
@@ -28,32 +32,93 @@ let lastEmbedding = null;
 let lastEmbeddingTimestamp = 0;
 const EMBEDDING_CACHE_TTL_MS = 5000;
 
+let SEARCH_COUNT = 0;
+const USER_ONLY_SEARCH_LIMIT = 3;
+
+setInterval(() => {
+  SEARCH_COUNT = 0;
+  console.log('[SEARCH] Counter reset');
+}, 5 * 60 * 1000);
+
 // In-memory vector cache
 export const VECTOR_STORE = {
   data: [],
+  userData: [],
   lastUpdated: null,
 };
+
+let CURRENT_USER = {
+  staffid: null,
+};
+
+export const setCurrentUser = user => {
+  CURRENT_USER = user;
+};
+
+export const getCurrentUser = () => CURRENT_USER;
 
 // ────────────────────────────────────────────────
 //  LOAD VECTORS FROM DB (CACHE)
 // ────────────────────────────────────────────────
 export const loadVectorsService = async db => {
   try {
+    const currentUser = getCurrentUser();
+    const createdByList = await getStaffByCreatedBy(db, currentUser);
+
     const staffList = await getAllStaff(db);
-    VECTOR_STORE.data = staffList
+
+    VECTOR_STORE.userData = createdByList
       .filter(item => item?.vector && item.vector !== 'null' && item.uuid)
       .map(item => {
-        const parsed = JSON.parse(item.vector);
+        const parsedAvg = JSON.parse(item.vector || '[]');
 
-        const validArray = Array.isArray(parsed)
-          ? parsed
-          : Object.values(parsed);
+        let parsedVectors = [];
+
+        // console.log(item.staffid)
+        if (item.vectors) {
+          const parsed = JSON.parse(item.vectors);
+          parsedVectors = Array.isArray(parsed) ? parsed : [];
+        }
+
+        // fallback for old users
+        if (parsedVectors.length === 0 && parsedAvg.length === 512) {
+          parsedVectors = [parsedAvg];
+        }
 
         return {
           ...item,
-          parsedVector: validArray,
+          avgVector: parsedAvg,
+          parsedVector: parsedVectors,
         };
       });
+
+    VECTOR_STORE.data = staffList
+      .filter(item => item?.vector && item.vector !== 'null' && item.uuid)
+      .map(item => {
+        const parsedAvg = JSON.parse(item.vector || '[]');
+
+        let parsedVectors = [];
+
+        // console.log(item.staffid)
+        if (item.vectors) {
+          const parsed = JSON.parse(item.vectors);
+          parsedVectors = Array.isArray(parsed) ? parsed : [];
+        }
+
+        // fallback for old users
+        if (parsedVectors.length === 0 && parsedAvg.length === 512) {
+          parsedVectors = [parsedAvg];
+        }
+
+        return {
+          ...item,
+          avgVector: parsedAvg,
+          parsedVector: parsedVectors,
+        };
+      });
+
+    console.log('VECTOR_STORE');
+    console.log(VECTOR_STORE.userData);
 
     const storedVersion = await AsyncStorage.getItem(VECTOR_VERSION_KEY);
 
@@ -97,6 +162,27 @@ const cosineSimilarity = (a, b) => {
 
   const magnitude = Math.sqrt(magA * magB);
   return magnitude === 0 ? 0 : dot / magnitude;
+};
+
+const getBestSimilarity = (query, vectors = []) => {
+  if (!vectors.length) return 0;
+
+  let best = 0;
+  let second = 0;
+
+  for (const v of vectors) {
+    const sim = cosineSimilarity(query, v);
+
+    if (sim > best) {
+      second = best;
+      best = sim;
+    } else if (sim > second) {
+      second = sim;
+    }
+  }
+
+  // slight boost instead of reduction
+  return best * 0.85 + second * 0.15;
 };
 
 // NORMALIZE VECTOR
@@ -174,7 +260,12 @@ const findMatchesInBatches = async queryEmbedding => {
 };
 
 const oldLinearSearch = async embedding => {
-  const vectors = VECTOR_STORE.data;
+  SEARCH_COUNT++;
+
+  const useUserOnly = SEARCH_COUNT <= USER_ONLY_SEARCH_LIMIT;
+
+  const vectors = useUserOnly ? VECTOR_STORE.userData : VECTOR_STORE.data;
+
   const matches = [];
 
   let bestScore = 0;
@@ -191,7 +282,7 @@ const oldLinearSearch = async embedding => {
     for (let j = i; j < end; j++) {
       const item = vectors[j];
 
-      const similarity = cosineSimilarity(embedding, item.parsedVector);
+      const similarity = getBestSimilarity(embedding, item.parsedVector);
 
       // Track best match
       if (similarity > bestScore) {
@@ -199,7 +290,7 @@ const oldLinearSearch = async embedding => {
         bestMatch = item;
 
         // Early exit if very strong match
-        if (bestScore > 0.92) {
+        if (bestScore > 0.7) {
           return {
             matches: [
               {
@@ -207,6 +298,7 @@ const oldLinearSearch = async embedding => {
                 name: item.name,
                 staffid: item.staffid,
                 similarity: bestScore,
+                img: item.img,
               },
             ],
             bestScore,
@@ -224,7 +316,7 @@ const oldLinearSearch = async embedding => {
         });
 
         // Stop collecting too many matches
-        if (matches.length >= 10) {
+        if (matches.length >= 5) {
           return { matches, bestScore };
         }
       }
@@ -295,12 +387,23 @@ export const recognizeFaceService = async ({ cameraRef, switchCamera }) => {
     // Capture fast photo
     const photo = await cameraRef.current.takePhoto({
       flash: 'off',
-      qualityPrioritization: 'quality',
+      qualityPrioritization: 'speed',
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    const photo2 = await cameraRef.current.takePhoto({
+      flash: 'off',
+      qualityPrioritization: 'speed',
     });
 
     const filePath = photo.path.startsWith('file://')
       ? photo.path
       : `file://${photo.path}`;
+
+    const filePath2 = photo2.path.startsWith('file://')
+      ? photo2.path
+      : `file://${photo2.path}`;
 
     // Get embedding
     const emb1 = await getFaceEmbeddingFromImage(
@@ -312,9 +415,18 @@ export const recognizeFaceService = async ({ cameraRef, switchCamera }) => {
     await new Promise(r => setTimeout(r, 60));
 
     const emb2 = await getFaceEmbeddingFromImage(
-      filePath,
+      filePath2,
       switchCamera ? 'front' : 'back',
     );
+
+    if (
+      !emb1 ||
+      !emb2 ||
+      typeof emb1 === 'string' ||
+      typeof emb2 === 'string'
+    ) {
+      throw new Error('Face not detected properly');
+    }
 
     // average embeddings
     const rawEmbedding = emb1.map((v, i) => (v + emb2[i]) / 2);
@@ -344,12 +456,14 @@ export const recognizeFaceService = async ({ cameraRef, switchCamera }) => {
       return {
         status: 'single',
         employee: matches[0],
+        embedding: embedding,
       };
     }
 
     return {
       status: 'multiple',
       matches,
+      embedding: embedding,
     };
   } catch (error) {
     // lastEmbedding = null;
@@ -459,6 +573,7 @@ export const updateFaceService = async ({
   staffData,
   base64: referenceBase64,
   embedding: avgEmbedding,
+  vectors: newVectors,
   cameraType: cameraPosition,
 }) => {
   try {
@@ -520,14 +635,39 @@ export const updateFaceService = async ({
 
     console.log('Saving to staff table...');
 
+    let vectors = [];
+
+    // existing user vectors
+    const existing = VECTOR_STORE.data.find(
+      v => v.staffid === staffData.user.emp_id,
+    );
+
+    if (existing?.parsedVector?.length) {
+      vectors = [...existing.parsedVector];
+    }
+
+    // 🔥 add new 3 embeddings (not avg)
+    if (Array.isArray(newVectors)) {
+      vectors.push(...newVectors);
+    }
+
+    // 🔥 limit
+    const MAX = 5;
+    if (vectors.length > MAX) {
+      vectors = vectors.slice(-MAX);
+    }
+
+    const currentUser = getCurrentUser();
+
     await addStaff(db, {
       uuid: staffData.guid,
       staffid: staffData.user.emp_id,
       name: staffData.name,
       vector: JSON.stringify(avgEmbedding),
+      vectors: JSON.stringify(vectors),
       img: compressedImage,
       enrollmode: 'offline',
-      createdby: staffData.guid,
+      createdby: currentUser,
     });
 
     console.log('Staff saved successfully');
@@ -538,6 +678,7 @@ export const updateFaceService = async ({
       uuid: staffData.guid,
       staffid: staffData.user.emp_id,
       vector: JSON.stringify(avgEmbedding),
+      vectors: JSON.stringify(vectors),
       img: compressedImage,
       action: 'update',
     });
@@ -555,7 +696,7 @@ export const updateFaceService = async ({
       name: staffData.name,
       staffid: staffData.user.emp_id,
       vector: JSON.stringify(avgEmbedding),
-      parsedVector: avgEmbedding,
+      parsedVector: vectors,
     };
 
     if (existingIndex >= 0) {
@@ -609,7 +750,7 @@ const findDuplicateFace = async (embedding, vectors, staffId) => {
       if (item.staffid === staffId) continue;
 
       // const normVector = normalizeVector(item.parsedVector);
-      const similarity = cosineSimilarity(embedding, item.parsedVector);
+      const similarity = getBestSimilarity(embedding, item.parsedVector);
 
       if (similarity > highestScore) {
         highestScore = similarity;
@@ -623,4 +764,83 @@ const findDuplicateFace = async (embedding, vectors, staffId) => {
   }
 
   return { highestScore, matchedEmployee };
+};
+
+// ────────────────────────────────────────────────
+//  CONTINUOUS LEARNING (BACKGROUND UPDATE)
+// ────────────────────────────────────────────────
+export const improveFaceModelService = async ({
+  db,
+  staffId,
+  uuid,
+  newEmbedding,
+  base64Image,
+}) => {
+  try {
+    const existing = VECTOR_STORE.data.find(v => v.staffid === staffId);
+    if (!existing) return;
+
+    const similarity = getBestSimilarity(newEmbedding, existing.parsedVector);
+
+    if (similarity < TEMPLATE_UPDATE_THRESHOLD) {
+      console.log(
+        `[FACE LEARNING] Skipped update for ${staffId} (low similarity: ${similarity})`,
+      );
+      return;
+    }
+
+    // 1. Blend the average vector (90% old, 10% new for stability)
+    const oldAvg =
+      typeof existing.vector === 'string'
+        ? JSON.parse(existing.vector)
+        : existing.vector;
+    const blendedAvg = blendAndNormalizeVectors(oldAvg, newEmbedding, 0.9);
+
+    // 2. Append to the multi-vector array (Max 5 vectors)
+    let vectors = Array.isArray(existing.parsedVector)
+      ? [...existing.parsedVector]
+      : [oldAvg];
+    vectors.push(newEmbedding);
+    if (vectors.length > 5) {
+      vectors = vectors.slice(-5);
+    }
+
+    // 3. Save to local Database
+    const currentUser = getCurrentUser();
+
+    await addStaff(db, {
+      uuid: existing.uuid,
+      staffid: existing.staffid,
+      name: existing.name,
+      vector: JSON.stringify(blendedAvg),
+      vectors: JSON.stringify(vectors),
+      img: base64Image || '',
+      enrollmode: 'offline',
+      createdby: currentUser,
+    });
+
+    // 4. Queue for Cloud Sync
+    await addFaceUpdate(db, {
+      uuid: existing.uuid || uuid,
+      staffid: staffId,
+      vector: JSON.stringify(blendedAvg),
+      vectors: JSON.stringify(vectors),
+      img: base64Image || '',
+      action: 'update',
+    });
+
+    // 5. Update In-Memory Cache immediately
+    existing.vector = JSON.stringify(blendedAvg);
+    existing.parsedVector = vectors;
+
+    const newVersion = Date.now();
+    await AsyncStorage.setItem(VECTOR_VERSION_KEY, String(newVersion));
+    VECTOR_STORE.lastUpdated = newVersion;
+
+    console.log(
+      `[FACE LEARNING] Successfully improved vectors for Employee: ${staffId}`,
+    );
+  } catch (error) {
+    console.error('[FACE LEARNING] Failed to improve model:', error);
+  }
 };

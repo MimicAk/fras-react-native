@@ -19,6 +19,12 @@ import { connectToDatabase } from '../database/connection';
 import { createTables } from '../database/schema';
 
 import RNFS from 'react-native-fs';
+import { syncVectorsPullOnly } from './sync.service';
+import {
+  formatCheckIn,
+  formatCheckOut,
+  formatPair,
+} from './attendance.service';
 
 /* ======================================================
    INTERNAL STATE
@@ -31,131 +37,76 @@ let isSyncRunning = false;
    SEQUENTIAL PAIRING LOGIC
 ====================================================== */
 
+/* ======================================================
+   SEQUENTIAL PAIRING LOGIC (Daily Boundary Fixed)
+====================================================== */
+
 const pairPunchesSequentially = (rows = []) => {
   if (!rows.length) return [];
 
   const grouped = new Map();
 
-  // ✅ Group by employee + attendance type
+  // ✅ Group by employee + attendance type + DATE
   for (const row of rows) {
-    const key = `${row.uuid}_${row.attendancetype}`;
+    // Extract just the YYYY-MM-DD from the punchdate
+    const dateObj = new Date(row.punchdate);
+    const dateKey = `${dateObj.getFullYear()}-${String(
+      dateObj.getMonth() + 1,
+    ).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
 
-    if (!grouped.has(key)) {
-      grouped.set(key, []);
-    }
+    const key = `${row.uuid}_${row.attendancetype}_${dateKey}`;
 
+    if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(row);
   }
 
   const pairedResults = [];
 
   for (const [, punches] of grouped.entries()) {
-    // ✅ Sort by punchdate ASC
+    // ✅ Sort chronologically
     punches.sort((a, b) => new Date(a.punchdate) - new Date(b.punchdate));
 
     let currentCheckIn = null;
 
     for (const punch of punches) {
-      // 🔹 If IN
+      // 🔹 IN Punch
       if (punch.punchtype === 'in') {
-        // If somehow previous IN was not paired (defensive safety)
+        // If an IN is already open, push it as a Standalone IN
         if (currentCheckIn) {
-          pairedResults.push({
-            guid: currentCheckIn.id,
-            emp_id: currentCheckIn.uuid,
-            project_id: currentCheckIn.projectid,
-            attendance_type: currentCheckIn.attendancetype,
-            date: currentCheckIn.punchdate.split('T')[0],
-
-            checkin_time: currentCheckIn.punchdate,
-            checkout_time: null,
-
-            checkin_lat: currentCheckIn.lat,
-            checkin_lang: currentCheckIn.lan,
-
-            checkout_lat: null,
-            checkout_lang: null,
-
-            // <-- ADDED MANUAL & IMAGE FIELDS -->
-            checkin_is_manual: currentCheckIn.ismanual,
-            checkout_is_manual: 0,
-            checkin_image: currentCheckIn.userimage,
-            checkout_image: null,
-
-            local_ids: [currentCheckIn.id],
-          });
+          pairedResults.push(formatCheckIn(currentCheckIn));
         }
-
         currentCheckIn = punch;
       }
 
-      // 🔹 If OUT
+      // 🔹 OUT Punch
       else if (punch.punchtype === 'out') {
         if (currentCheckIn) {
-          pairedResults.push({
-            guid: currentCheckIn.id, // ✅ Always checkin ID
-
-            emp_id: currentCheckIn.uuid,
-            project_id: currentCheckIn.projectid,
-            attendance_type: currentCheckIn.attendancetype,
-            date: currentCheckIn.punchdate.split('T')[0],
-
-            checkin_time: currentCheckIn.punchdate,
-            checkout_time: punch.punchdate,
-
-            checkin_lat: currentCheckIn.lat,
-            checkin_lang: currentCheckIn.lan,
-
-            checkout_lat: punch.lat,
-            checkout_lang: punch.lan,
-
-            // <-- ADDED MANUAL & IMAGE FIELDS -->
-            checkin_is_manual: currentCheckIn.ismanual,
-            checkout_is_manual: punch.ismanual,
-            checkin_image: currentCheckIn.userimage,
-            checkout_image: punch.userimage,
-
-            local_ids: [currentCheckIn.id, punch.id],
-          });
-
+          // ✅ VALID PAIR (IN → OUT on the same day)
+          pairedResults.push(formatPair(currentCheckIn, punch));
           currentCheckIn = null;
         } else {
-          // Defensive safety (should not happen as per your business rule)
-          console.warn('Checkout without checkin detected:', punch);
+          // ✅ Standalone OUT (No preceding IN found for this day)
+          pairedResults.push(formatCheckOut(punch));
         }
       }
     }
 
-    // ✅ If IN exists without OUT → push checkin only
+    // 🔹 Remaining IN (No OUT found before the day ended)
     if (currentCheckIn) {
-      pairedResults.push({
-        guid: currentCheckIn.id,
-
-        emp_id: currentCheckIn.uuid,
-        project_id: currentCheckIn.projectid,
-        attendance_type: currentCheckIn.attendancetype,
-        date: currentCheckIn.punchdate.split('T')[0],
-
-        checkin_time: currentCheckIn.punchdate,
-        checkout_time: null,
-
-        checkin_lat: currentCheckIn.lat,
-        checkin_lang: currentCheckIn.lan,
-
-        checkout_lat: null,
-        checkout_lang: null,
-
-        checkin_is_manual: currentCheckIn.ismanual,
-        checkout_is_manual: 0,
-        checkin_image: currentCheckIn.userimage,
-        checkout_image: null,
-
-        local_ids: [currentCheckIn.id],
-      });
+      pairedResults.push(formatCheckIn(currentCheckIn));
     }
   }
 
   return pairedResults;
+};
+
+const buildSyncKey = record => {
+  return [
+    record.emp_id,
+    record.attendance_type,
+    record.checkin_time || '',
+    record.checkout_time || '',
+  ].join('_');
 };
 
 /* ======================================================
@@ -177,7 +128,7 @@ export const runBackgroundSync = async userToken => {
       return;
     }
 
-    // console.log(unsynced);
+    console.log(unsynced);
 
     const groupKeys = [
       ...new Set(unsynced.map(r => `${r.uuid}_${r.attendancetype}`)),
@@ -194,47 +145,42 @@ export const runBackgroundSync = async userToken => {
 
     for (const record of pairedRecords) {
       try {
+        
+
         const formData = new FormData();
 
-        formData.append('guid', record.guid);
-        formData.append('emp_id', record.emp_id);
-        formData.append('project_id', record.project_id);
-        formData.append('date', record.date);
-        formData.append('checkin_time', record.checkin_time);
-        formData.append('checkout_time', record.checkout_time);
+        formData.append('sync_key', buildSyncKey(record));
+        formData.append('guid', record.guid || '');
+        formData.append('emp_id', record.emp_id || '');
+        formData.append('project_id', record.project_id || '');
+        formData.append('date', record.date || '');
 
-        formData.append('checkin_lat', record.checkin_lat);
-        formData.append('checkin_lang', record.checkin_lang);
-        formData.append('checkout_lat', record.checkout_lat);
-        formData.append('checkout_lang', record.checkout_lang);
+        // Ensure missing times are sent as empty strings, not "undefined"
+        formData.append('checkin_time', record.checkin_time || '');
+        formData.append('checkout_time', record.checkout_time || '');
 
-        formData.append('checkin_is_manual', record.checkin_is_manual);
-        formData.append('checkout_is_manual', record.checkout_is_manual);
+        formData.append('checkin_lat', record.checkin_lat || '');
+        formData.append('checkin_lang', record.checkin_lang || '');
+        formData.append('checkout_lat', record.checkout_lat || '');
+        formData.append('checkout_lang', record.checkout_lang || '');
 
-        const checkinPath = await base64ToFile(
-          record.checkin_image,
-          'checkin.jpg',
-        );
-        const checkoutPath = await base64ToFile(
-          record.checkout_image,
-          'checkout.jpg',
-        );
+        formData.append('checkin_is_manual', record.checkin_is_manual || 0);
+        formData.append('checkout_is_manual', record.checkout_is_manual || 0);
 
-        // Convert base64 → file
         if (record.checkin_image) {
-          formData.append('checkin_image', {
-            uri: `file://${checkinPath}`,
-            type: 'image/jpeg',
-            name: 'checkin.jpg',
-          });
+          let img = record.checkin_image;
+          if (!img.startsWith('data:image')) {
+            img = `data:image/jpeg;base64,${img}`;
+          }
+          formData.append('checkin_image', img);
         }
 
         if (record.checkout_image) {
-          formData.append('checkout_image', {
-            uri: `file://${checkoutPath}`,
-            type: 'image/jpeg',
-            name: 'checkout.jpg',
-          });
+          let img = record.checkout_image;
+          if (!img.startsWith('data:image')) {
+            img = `data:image/jpeg;base64,${img}`;
+          }
+          formData.append('checkout_image', img);
         }
 
         const response = await fetch(
@@ -252,6 +198,7 @@ export const runBackgroundSync = async userToken => {
         console.log(response);
         console.log('response:', responseText);
         console.log(formData);
+        console.log(pairedRecords);
 
         if (!response.ok) {
           throw new Error('Server rejected record');
@@ -303,6 +250,7 @@ export const syncVectorBackground = async (userToken, userGuid) => {
             body: JSON.stringify({
               empguid: face.uuid,
               vector: JSON.stringify(face.vector),
+              vectors: JSON.stringify(face.vectors),
               blob: base64Image,
               createdby: userGuid,
             }),
@@ -350,6 +298,28 @@ export const startBackgroundSyncService = userToken => {
     syncInterval = setInterval(() => {
       runBackgroundSync(userToken);
     }, 15 * 60 * 1000);
+  }
+};
+
+let isVectorPullRunning = false;
+
+export const runVectorPullSync = async (userToken, userGuid) => {
+  if (isVectorPullRunning) return;
+  isVectorPullRunning = true;
+
+  try {
+    console.log('⬇️ Vector Pull Sync Started');
+
+    await syncVectorsPullOnly({
+      token: userToken,
+      userGuid,
+    });
+
+    console.log('✅ Vector Pull Sync Completed');
+  } catch (err) {
+    console.log('❌ Vector Pull Sync Error:', err.message);
+  } finally {
+    isVectorPullRunning = false;
   }
 };
 

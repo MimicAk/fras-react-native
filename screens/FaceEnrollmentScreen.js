@@ -74,6 +74,9 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
   const [isCapturing, setIsCapturing] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
 
+  const [isCaptureEnabled, setIsCaptureEnabled] = useState(false);
+  const readyTimeoutRef = useRef(null);
+
   // --- Business Logic (Unchanged) ---
   useEffect(() => {
     if (hasPermission === false) {
@@ -97,6 +100,14 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
     }
   }, [staffData, navigation]);
 
+  useEffect(() => {
+    return () => {
+      if (readyTimeoutRef.current) {
+        clearTimeout(readyTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const updateQualityFeedback = useCallback(async () => {
     if (
       !cameraRef.current ||
@@ -118,11 +129,34 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         snapshotPath,
         cameraPosition,
       );
+      const isReady = result?.isReady;
+
       setStatusText(
-        result?.isReady
+        isReady
           ? 'Ready! Press Capture'
           : result?.message || 'Adjust position...',
       );
+
+      // 🔥 Smooth UX logic
+      if (isReady) {
+        // delay enabling (avoid flicker)
+        if (!readyTimeoutRef.current) {
+          readyTimeoutRef.current = setTimeout(() => {
+            setIsCaptureEnabled(true);
+          }, 800); // 0.8s stability
+        }
+      } else {
+        // DO NOT disable immediately
+        if (readyTimeoutRef.current) {
+          clearTimeout(readyTimeoutRef.current);
+          readyTimeoutRef.current = null;
+        }
+
+        // delay disabling (grace period)
+        setTimeout(() => {
+          setIsCaptureEnabled(false);
+        }, 1200); // 1.2s grace
+      }
     } catch (err) {
       console.log('Quality check failed:', err);
     } finally {
@@ -200,6 +234,8 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
 
       const avgEmbedding = computeAverageAndNormalize(validEmbeddings);
 
+      const vectors = validEmbeddings.map(v => normalizeVector(v));
+
       const db = await connectToDatabase();
 
       const result = await updateFaceService({
@@ -207,6 +243,7 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         staffData,
         base64: referenceBase64,
         embedding: avgEmbedding,
+        vectors: vectors,
         cameraType: cameraPosition,
       });
 
@@ -365,9 +402,10 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
                 style={[
                   styles.captureButton,
                   !cameraReady && styles.captureButtonDisabled,
+                  isCaptureEnabled && { borderColor: '#22c55e' },
                 ]}
                 onPress={handleCapture}
-                disabled={!cameraReady}
+                disabled={!cameraReady || !isCaptureEnabled}
               >
                 <View style={styles.captureInner} />
               </TouchableOpacity>
