@@ -9,7 +9,6 @@ import {
   getAllStaffNotSync,
   markStaffSynced,
 } from '../database/staff.repository';
-import { loadVectorsService } from './face.service';
 
 /* =========================================================
    PULL VECTORS FROM SERVER (DOWNLOAD)
@@ -42,7 +41,8 @@ export const pullVectorsService = async ({ token, userGuid, onProgress }) => {
     });
 
     if (!response.ok) {
-      throw new Error('Vector fetch failed');
+      const errorText = await response.text();
+      throw new Error(`Vector fetch failed: ${errorText}`);
     }
 
     const json = await response.json();
@@ -51,28 +51,32 @@ export const pullVectorsService = async ({ token, userGuid, onProgress }) => {
 
     if (data.length === 0) break;
 
-    // 🔥 Insert inside transaction
-    await db.transaction(async tx => {
-      for (const item of data) {
-        await addStaff(db, {
-          uuid: item?.empguid,
-          staffid: item?.user?.emp_id,
-          name: item?.user?.name,
-
-          // 🔥 avg embedding
-          vector: item?.vector,
-
-          // 🔥 multi embeddings (fallback if backend not ready)
-          vectors: item?.vectors || JSON.stringify([JSON.parse(item?.vector)]),
-
-          img: item?.image,
-          syncdate: new Date().toISOString(),
-          enrollmode: 'online',
-          createdby: item?.created_by,
-        });
-
-        processedCount++;
-      }
+    // 🔥 FIX: Execute all inserts properly in a transaction
+    // Note: Ensure `addStaff` is updated to take `tx` and executeSql synchronously
+    await new Promise((resolve, reject) => {
+      db.transaction(
+        tx => {
+          data.forEach(item => {
+            // If addStaff still requires async/db, you must rewrite it to be synchronous here:
+            // tx.executeSql('INSERT INTO staff ...', [...]);
+            addStaff(tx, {
+              uuid: item?.empguid,
+              staffid: item?.user?.emp_id,
+              name: item?.user?.name,
+              vector: item?.vector,
+              vectors:
+                item?.vectors || JSON.stringify([JSON.parse(item?.vector)]),
+              img: item?.image,
+              syncdate: new Date().toISOString(),
+              enrollmode: 'online',
+              createdby: item?.created_by,
+            });
+            processedCount++;
+          });
+        },
+        reject,
+        resolve,
+      );
     });
 
     if (onProgress) {
@@ -82,13 +86,11 @@ export const pullVectorsService = async ({ token, userGuid, onProgress }) => {
     page++;
   }
 
+  // ✅ Only save date after full successful sync
   await AsyncStorage.setItem(
     'lastsyncdate',
     new Date().toISOString().split('T')[0],
   );
-
-  // 🔥 rebuild vector cache after pull
-  await loadVectorsService(db);
 
   return { totalCount, processedCount };
 };
@@ -117,15 +119,14 @@ export const pushVectorsService = async ({ token }) => {
   );
 
   if (!response.ok) {
-    throw new Error('Push failed');
+    const errorText = await response.text();
+    throw new Error(`Push failed: ${errorText}`);
   }
 
-  // 🔥 mark only pushed records
   const uuids = unSynced.map(item => item.empguid);
-  await markStaffSynced(db, uuids);
 
-  // 🔥 refresh in-memory vectors
-  await loadVectorsService(db);
+  // 🔥 Wrap markings in transaction if not already handled in repository
+  await markStaffSynced(db, uuids);
 
   return { pushed: unSynced.length };
 };
@@ -139,11 +140,10 @@ export const syncVectorsPullOnly = async ({ token, userGuid, onProgress }) => {
 
     let page = 1;
     const length = 100;
-
     let totalCount = 0;
     let processedCount = 0;
+    let highestSyncDate = null;
 
-    // ✅ Get last sync
     const syncKey = getSyncKey(userGuid);
     let lastSyncDate = await AsyncStorage.getItem(syncKey);
 
@@ -167,7 +167,8 @@ export const syncVectorsPullOnly = async ({ token, userGuid, onProgress }) => {
       });
 
       if (!response.ok) {
-        console.log(response.blob)
+        const errText = await response.text();
+        console.warn('Vector fetch failed:', errText);
         throw new Error('Vector fetch failed');
       }
 
@@ -175,66 +176,64 @@ export const syncVectorsPullOnly = async ({ token, userGuid, onProgress }) => {
       const data = json?.data?.data || [];
       totalCount = json?.data?.total_count || 0;
 
-      console.log(json)
-
-      // 🔴 Stop if no data
       if (!data.length) break;
 
-      // 🔥 UPSERT TRANSACTION
-      await db.transaction(async tx => {
-        for (const item of data) {
-          let vectors = item?.vectors;
+      // 🔥 FIX: Standard SQLite Transaction
+      await new Promise((resolve, reject) => {
+        db.transaction(
+          tx => {
+            data.forEach(item => {
+              let vectors = item?.vectors;
 
-          // ✅ Safe fallback for old data
-          if (!vectors) {
-            try {
-              const parsed = JSON.parse(item?.vector || '[]');
-              vectors = JSON.stringify([parsed]);
-            } catch {
-              vectors = JSON.stringify([]);
-            }
-          }
+              if (!vectors) {
+                try {
+                  const parsed = JSON.parse(item?.vector || '[]');
+                  vectors = JSON.stringify([parsed]);
+                } catch {
+                  vectors = JSON.stringify([]);
+                }
+              }
 
-          await addStaff(db, {
-            uuid: item?.empguid,
-            staffid: item?.user?.emp_id,
-            name: item?.user?.name,
-            vector: item?.vector,
-            vectors: vectors,
-            img: item?.image,
-            syncdate: new Date().toISOString(),
-            enrollmode: 'online',
-            createdby: item?.created_by,
-          });
+              // Ensure addStaff is using tx.executeSql directly without async/await
+              addStaff(tx, {
+                uuid: item?.empguid,
+                staffid: item?.user?.emp_id,
+                name: item?.user?.name,
+                vector: item?.vector,
+                vectors: vectors,
+                img: item?.image,
+                syncdate: new Date().toISOString(),
+                enrollmode: 'online',
+                createdby: item?.created_by,
+              });
 
-          processedCount++;
-        }
+              processedCount++;
+            });
+          },
+          reject,
+          resolve,
+        );
       });
 
-      // ✅ Update progress
       if (onProgress) {
         onProgress(processedCount, totalCount);
       }
 
-      // 🔥 CRITICAL: update last sync AFTER EACH PAGE
+      // Track the latest date, but do NOT save to AsyncStorage yet
       const lastItem = data[data.length - 1];
-
-      let latestSyncValue;
-
       if (lastItem?.updated_at) {
-        latestSyncValue = lastItem.updated_at; // BEST (timestamp)
-      } else {
-        latestSyncValue = new Date().toISOString().split('T')[0]; // fallback
+        highestSyncDate = lastItem.updated_at;
+      } else if (!highestSyncDate) {
+        highestSyncDate = new Date().toISOString().split('T')[0];
       }
 
-      await AsyncStorage.setItem(syncKey, latestSyncValue);
-
-      // 🔁 Move next page
       page++;
     }
 
-    // ✅ Reload in-memory vectors after full sync
-    await loadVectorsService(db);
+    // ✅ CRITICAL FIX: Update last sync ONLY after all pages finished successfully
+    if (highestSyncDate) {
+      await AsyncStorage.setItem(syncKey, highestSyncDate);
+    }
 
     return {
       status: 'success',

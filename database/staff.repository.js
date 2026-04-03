@@ -80,7 +80,7 @@ export const updateFaceVectors = async (db, staffid, avg, vectors) => {
 export const getAllStaff = async db => {
   return fetchAll(
     db,
-    `
+    ` 
     SELECT uuid, staffid, name, vector, vectors, img
     FROM facevector
     WHERE vectors IS NOT NULL

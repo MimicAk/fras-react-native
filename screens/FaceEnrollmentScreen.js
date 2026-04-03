@@ -220,8 +220,11 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
     navigation,
   ]);
 
-  const finalizeEnrollment = async finalEmbeddings => {
+  const finalizeEnrollment = async (finalEmbeddings, forceSave = false) => {
     try {
+      setIsFinalizing(true);
+      setStatusText(forceSave ? 'Saving Face...' : 'Checking duplicates...');
+
       const validEmbeddings = finalEmbeddings.filter(
         e =>
           (Array.isArray(e) || e instanceof Float32Array) && e.length === 512,
@@ -229,11 +232,11 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
 
       if (validEmbeddings.length === 0) {
         Alert.alert('Face Error', 'No valid face embeddings captured.');
+        setIsFinalizing(false);
         return;
       }
 
       const avgEmbedding = computeAverageAndNormalize(validEmbeddings);
-
       const vectors = validEmbeddings.map(v => normalizeVector(v));
 
       const db = await connectToDatabase();
@@ -245,41 +248,63 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         embedding: avgEmbedding,
         vectors: vectors,
         cameraType: cameraPosition,
+        skipDuplicationCheck: forceSave, // Passes true if user clicked 'Continue'
       });
 
       console.log('Enrollment result:', result);
 
       // SUCCESS
       if (result?.status === 'success') {
-        // navigation.navigate('EnrolledEmployeeTab', {
-        //   enrolledResult: {
-        //     uuid: staffData.guid,
-        //   },
-        // });
-
         onEnrollmentSuccess?.();
         navigation.goBack();
-
         return;
       }
 
-      // DUPLICATE FACE
-      if (result?.status === 'duplicate') {
+      // DUPLICATE FACE - Show Confirmation Dialog
+      if (result?.status === 'duplicate' && !forceSave) {
+        setIsFinalizing(false); // Hide loader before showing alert
+        setStatusText('Duplicate Found');
+
+        Alert.alert(
+          'Duplicate Face Detected',
+          result.message ||
+            'This face matches an existing employee. Do you want to continue and link it anyway?',
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+              onPress: () => {
+                // Cancel the flow and reset states for a fresh try
+                setCurrentStep(0);
+                setEmbeddings([]);
+                setReferenceBase64(null);
+                setStatusText('Position face in oval');
+
+                // OR if you want it to completely close the screen instead:
+                // navigation.goBack();
+              },
+            },
+            {
+              text: 'Continue',
+              style: 'destructive',
+              onPress: () => finalizeEnrollment(finalEmbeddings, true), // Execute again with forceSave = true
+            },
+          ],
+          { cancelable: false },
+        );
+        return; // Exit here so we don't hit the standard error alerts below
+      }
+
+      // If it fails even WITH forceSave, or throws a standard error
+      if (result?.status === 'duplicate' && forceSave) {
         Alert.alert('Duplicate Face', result.message);
-        return;
-      }
-
-      // SERVICE ERROR
-      if (result?.status === 'error') {
+      } else if (result?.status === 'error') {
         Alert.alert('Enrollment Error', result.message);
-        return;
+      } else {
+        Alert.alert('Enrollment Failed', 'Unexpected response from service.');
       }
-
-      // UNKNOWN ERROR
-      Alert.alert('Enrollment Failed', 'Unexpected response from service.');
     } catch (err) {
       console.error('Enrollment crash:', err);
-
       Alert.alert(
         'System Error',
         err?.message || 'Unexpected error occurred during enrollment.',

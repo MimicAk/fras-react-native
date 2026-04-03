@@ -20,52 +20,56 @@ const MultipleMatchPopup = ({ visible, matches = [], onSelect, onCancel }) => {
         <Text style={styles.title}>Multiple Matches Found</Text>
 
         <ScrollView style={{ width: '100%', maxHeight: 250 }}>
-          {matches.map((person, index) => {
-            let imageSource;
-            if (person.img) {
-              // Check if img is a valid URL
-              if (
-                typeof person.img === 'string' &&
-                (person.img.startsWith('http://') ||
-                  person.img.startsWith('https://'))
-              ) {
-                imageSource = { uri: person.img };
+          {matches
+            .sort((a, b) => b.similarity - a.similarity) // highest → lowest
+            .slice(0, 5) // top 5 only
+            .map((person, index) => {
+              let imageSource;
+
+              if (person.img) {
+                if (
+                  typeof person.img === 'string' &&
+                  (person.img.startsWith('http://') ||
+                    person.img.startsWith('https://'))
+                ) {
+                  imageSource = { uri: person.img };
+                } else {
+                  imageSource = { uri: `data:image/jpeg;base64,${person.img}` };
+                }
               } else {
-                imageSource = { uri: `data:image/jpeg;base64,${person.img}` };
+                imageSource = {
+                  uri: `https://ui-avatars.com/api/?name=${person.name}&background=random`,
+                };
               }
-            } else {
-              imageSource = {
-                uri: `https://ui-avatars.com/api/?name=${person.name}&background=random`,
-              };
-            }
 
-            return (
-              <TouchableOpacity
-                key={index}
-                style={styles.personItem}
-                onPress={() => onSelect(person)}
-              >
-                <Image source={imageSource} style={styles.avatar} />
-                <View style={{ marginLeft: 12 }}>
-                  <Text style={styles.name}>{person.name}</Text>
-                  <Text style={styles.staffId}>ID: {person.staffid}</Text>
+              return (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.personItem}
+                  onPress={() => onSelect(person)}
+                >
+                  <Image source={imageSource} style={styles.avatar} />
 
-                  <Text
-                    style={[
-                      styles.confidence,
-                      person.similarity > 0.8
-                        ? styles.highConfidence
-                        : person.similarity > 0.65
-                        ? styles.mediumConfidence
-                        : styles.lowConfidence,
-                    ]}
-                  >
-                    {(person.similarity * 100).toFixed(1)}% match
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            );
-          })}
+                  <View style={{ marginLeft: 12 }}>
+                    <Text style={styles.name}>{person.name}</Text>
+                    <Text style={styles.staffId}>ID: {person.staffid}</Text>
+
+                    <Text
+                      style={[
+                        styles.confidence,
+                        person.similarity > 0.8
+                          ? styles.highConfidence
+                          : person.similarity > 0.65
+                          ? styles.mediumConfidence
+                          : styles.lowConfidence,
+                      ]}
+                    >
+                      {(person.similarity * 100).toFixed(1)}% match
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
         </ScrollView>
 
         <TouchableOpacity

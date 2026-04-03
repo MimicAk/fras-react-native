@@ -62,85 +62,84 @@ export const getCurrentUser = () => CURRENT_USER;
 // ────────────────────────────────────────────────
 export const loadVectorsService = async db => {
   try {
+    const storedVersion = await AsyncStorage.getItem(VECTOR_VERSION_KEY);
+    const now = Date.now();
+
+    // ⛔ Skip if loaded within last 1 hour
+    // if (storedVersion) {
+    //   const lastLoaded = Number(storedVersion);
+    //   const duration = 5 * 60 * 1000;
+
+    //   if (now - lastLoaded < duration) {
+    //     console.log(`[FACE] Skipping load (${duration})`);
+    //     return false;
+    //   }
+    // }
+
     const currentUser = getCurrentUser();
-    const createdByList = await getStaffByCreatedBy(db, currentUser);
 
-    const staffList = await getAllStaff(db);
+    const [createdByList, staffList] = await Promise.all([
+      getStaffByCreatedBy(db, currentUser),
+      getAllStaff(db),
+    ]);
 
-    VECTOR_STORE.userData = createdByList
-      .filter(item => item?.vector && item.vector !== 'null' && item.uuid)
-      .map(item => {
-        const parsedAvg = JSON.parse(item.vector || '[]');
+    console.log(createdByList);
 
-        let parsedVectors = [];
+    VECTOR_STORE.userData = mapVectorData(createdByList);
 
-        // console.log(item.staffid)
-        if (item.vectors) {
-          const parsed = JSON.parse(item.vectors);
-          parsedVectors = Array.isArray(parsed) ? parsed : [];
-        }
-
-        // fallback for old users
-        if (parsedVectors.length === 0 && parsedAvg.length === 512) {
-          parsedVectors = [parsedAvg];
-        }
-
-        return {
-          ...item,
-          avgVector: parsedAvg,
-          parsedVector: parsedVectors,
-        };
-      });
-
-    VECTOR_STORE.data = staffList
-      .filter(item => item?.vector && item.vector !== 'null' && item.uuid)
-      .map(item => {
-        const parsedAvg = JSON.parse(item.vector || '[]');
-
-        let parsedVectors = [];
-
-        // console.log(item.staffid)
-        if (item.vectors) {
-          const parsed = JSON.parse(item.vectors);
-          parsedVectors = Array.isArray(parsed) ? parsed : [];
-        }
-
-        // fallback for old users
-        if (parsedVectors.length === 0 && parsedAvg.length === 512) {
-          parsedVectors = [parsedAvg];
-        }
-
-        return {
-          ...item,
-          avgVector: parsedAvg,
-          parsedVector: parsedVectors,
-        };
-      });
+    VECTOR_STORE.data = mapVectorData(staffList);
 
     console.log('VECTOR_STORE');
     console.log(VECTOR_STORE.userData);
-
-    const storedVersion = await AsyncStorage.getItem(VECTOR_VERSION_KEY);
 
     VECTOR_STORE.lastUpdated = storedVersion
       ? Number(storedVersion)
       : Date.now();
 
     // Fire & Forget: Build the high-speed index in the background
-    setTimeout(() => {
-      if (faceIndexManager.hasIndex()) return;
-      console.log('[FACE] Starting lazy HNSW build in background');
-      faceIndexManager
-        .buildIndex(VECTOR_STORE.data, VECTOR_STORE.lastUpdated)
-        .catch(err =>
-          console.log('[HNSW] Lazy build failed (non-critical)', err),
-        );
-    }, 3000);
+    // setTimeout(() => {
+    //   if (faceIndexManager.hasIndex()) return;
+    //   console.log('[FACE] Starting lazy HNSW build in background');
+    //   faceIndexManager
+    //     .buildIndex(VECTOR_STORE.data, VECTOR_STORE.lastUpdated)
+    //     .catch(err =>
+    //       console.log('[HNSW] Lazy build failed (non-critical)', err),
+    //     );
+    // }, 3000);
 
     return true;
   } catch (error) {
     console.error('[FACE] loadVectorsService error:', error);
     throw new Error('Failed to load face vectors from database');
+  }
+};
+
+const mapVectorData = list => {
+  return list
+    .filter(item => item?.vector && item.vector !== 'null' && item.uuid)
+    .map(item => {
+      const parsedAvg = safeParse(item.vector);
+      let parsedVectors = safeParse(item.vectors);
+
+      if (!Array.isArray(parsedVectors)) parsedVectors = [];
+
+      if (parsedVectors.length === 0 && parsedAvg.length === 512) {
+        parsedVectors = [parsedAvg];
+      }
+
+      return {
+        ...item,
+        avgVector: parsedAvg,
+        parsedVector: parsedVectors,
+      };
+    });
+};
+
+const safeParse = val => {
+  try {
+    return typeof val === 'string' ? JSON.parse(val) : val;
+  } catch {
+    return [];
   }
 };
 
@@ -205,7 +204,7 @@ export const blendAndNormalizeVectors = (oldVector, newVector, alpha = 0.9) => {
 //  BATCHED MATCHING
 // ────────────────────────────────────────────────
 // ────────────────────────────────────────────────
-//   BATCHED MATCHING (HNSW with Linear Fallback)
+//   BATCHED MATCHING (with Linear Fallback)
 // ────────────────────────────────────────────────
 const findMatchesInBatches = async queryEmbedding => {
   const normalizedQuery = queryEmbedding; //already normalized
@@ -307,7 +306,10 @@ const oldLinearSearch = async embedding => {
       }
 
       // Add match
-      if (similarity >= RECOGNITION_THRESHOLD) {
+      if (
+        similarity >= TEMPLATE_UPDATE_THRESHOLD &&
+        similarity > FACE_MATCH_THRESHOLD
+      ) {
         matches.push({
           uuid: item.uuid,
           name: item.name,
@@ -575,6 +577,7 @@ export const updateFaceService = async ({
   embedding: avgEmbedding,
   vectors: newVectors,
   cameraType: cameraPosition,
+  skipDuplicationCheck = false,
 }) => {
   try {
     console.log('===== FACE UPDATE START =====');
@@ -611,20 +614,22 @@ export const updateFaceService = async ({
       await loadVectorsService(db);
     }
 
-    const { highestScore, matchedEmployee } = await findDuplicateFace(
-      avgEmbedding,
-      VECTOR_STORE.data,
-      staffData.user.emp_id,
-    );
+    if (!skipDuplicationCheck) {
+      const { highestScore, matchedEmployee } = await findDuplicateFace(
+        avgEmbedding,
+        VECTOR_STORE.data,
+        staffData.user.emp_id,
+      );
 
-    console.log('Highest similarity:', highestScore);
+      console.log('Highest similarity:', highestScore);
 
-    if (highestScore >= ENROLLMENT_DUPLICATE_THRESHOLD) {
-      console.warn('Duplicate face detected');
-      return {
-        status: 'duplicate',
-        message: `Face already registered for employee ${matchedEmployee?.staffid}`,
-      };
+      if (highestScore >= ENROLLMENT_DUPLICATE_THRESHOLD) {
+        console.warn('Duplicate face detected');
+        return {
+          status: 'duplicate',
+          message: `Face already registered for employee ${matchedEmployee?.staffid}`,
+        };
+      }
     }
 
     console.log('Compressing image...');

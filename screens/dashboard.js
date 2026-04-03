@@ -28,6 +28,7 @@ import {
   checkInitialSyncService,
   getOverallSyncStatsService,
 } from '../services/dashboard.service';
+import { config } from '../config/config';
 
 const { width } = Dimensions.get('window');
 
@@ -60,10 +61,54 @@ export default function DashboardScreen({
     totalCheckOuts: 0,
   });
 
-  const [loading, setLoading] = useState(true);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [loadError, setLoadError] = useState(null);
+
+
+  // FOR API TESTING
+  // useEffect(() => {
+  //   const fetchVectors = async () => {
+  //     try {
+  //       const token = user?.token;
+  //       const userGuid = user?.guid;
+  //       const lastSyncDate = user?.lastSyncDate || '2025-06-01';
+  //       const length = 20;
+  //       const page = 1;
+
+  //       const response = await fetch(`${config.Base_URL}/api/getallvectors`, {
+  //         method: 'POST',
+  //         headers: {
+  //           'Content-Type': 'application/json',
+  //           Authorization: `Bearer ${token}`,
+  //         },
+  //         body: JSON.stringify({
+  //           update_date: lastSyncDate,
+  //           createdby: userGuid,
+  //           length,
+  //           page,
+  //         }),
+  //       });
+
+  //       if (!response.ok) {
+  //         const errorText = await response.text();
+  //         throw new Error(`Vector fetch failed: ${errorText}`);
+  //       }
+
+  //       const json = await response.json();
+  //       const data = json?.data?.data || [];
+  //       const totalCount = json?.data?.total_count || 0;
+
+  //       console.log('Fetched vectors:', data);
+  //       console.log('Total count:', totalCount);
+  //     } catch (err) {
+  //       console.warn('Vector fetch error:', err);
+  //     }
+  //   };
+
+  //   fetchVectors();
+  // }, [user]);
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
@@ -75,6 +120,7 @@ export default function DashboardScreen({
   const loadDashboardData = useCallback(async () => {
     try {
       setLoadError(null);
+      // Fetch stats concurrently
       const [today, overall] = await Promise.all([
         getTodayStatsService(),
         getOverallSyncStatsService(),
@@ -121,13 +167,29 @@ export default function DashboardScreen({
 
   useFocusEffect(
     useCallback(() => {
+      let isActive = true;
+
+      if (!user) return;
+
       const initialize = async () => {
-        if (!user) return;
-        setLoading(true);
-        await Promise.all([loadDashboardData(), checkNeedsInitialSync()]);
-        setLoading(false);
+        // 1. Start fetching stats IMMEDIATELY (Do not wait for transitions)
+        await loadDashboardData();
+
+        // 2. Clear loader the exact millisecond stats arrive
+        if (isActive) {
+          setIsInitialLoad(false);
+        }
       };
+
       initialize();
+
+      // 3. Fire the background sync check completely separately
+      // so it never blocks the UI from showing the stats.
+      checkNeedsInitialSync();
+
+      return () => {
+        isActive = false; // Prevent memory leaks if user navigates away fast
+      };
     }, [user, loadDashboardData, checkNeedsInitialSync]),
   );
 
@@ -137,33 +199,36 @@ export default function DashboardScreen({
       return;
     }
     setRefreshing(true);
-    await loadDashboardData();
+    await loadDashboardData(); // Only reload data on pull-to-refresh, don't trigger loader overlay
     setRefreshing(false);
   };
+
+  const handleLogout = useCallback(() => {
+    logout();
+    navigation.navigate('Login');
+  }, [logout, navigation]);
 
   const syncPercentage = useMemo(() => {
     if (overallStats.total <= 0) return 0;
     return Math.round((overallStats.synced / overallStats.total) * 100);
   }, [overallStats]);
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.centered}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={styles.loadingText}>Loading workspace...</Text>
-      </SafeAreaView>
-    );
-  }
+  const locationName = useMemo(() => {
+    return nearyByProject[0]?.location_shotname ?? 'Detecting location...';
+  }, [nearyByProject]);
+
+  const coordinates = useMemo(() => {
+    const project = nearyByProject[0];
+    return project
+      ? `${project.latitude ?? '0.0'}, ${project.longitude ?? '0.0'}`
+      : '—';
+  }, [nearyByProject]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Header
         name={user?.name ?? 'User'}
-        onLogoutPress={() => {
-          logout();
-          navigation.navigate('Login');
-        }}
-
+        onLogoutPress={handleLogout}
         navigation={navigation}
       />
 
@@ -192,119 +257,124 @@ export default function DashboardScreen({
         )}
 
         <View style={styles.contentPadding}>
+          {/* Top layout renders instantly from local memory */}
           {nearyByProject.length > 1 && (
             <View style={styles.dropdownContainer}>
               <ProjectDropdown projectList={nearyByProject} />
             </View>
           )}
 
-          <LocationCard
-            location={
-              nearyByProject[0]?.location_shotname ?? 'Detecting location...'
-            }
-            coordinates={
-              nearyByProject[0]
-                ? `${nearyByProject[0].latitude ?? '0.0'}, ${
-                    nearyByProject[0].longitude ?? '0.0'
-                  }`
-                : '—'
-            }
-          />
+          <LocationCard location={locationName} coordinates={coordinates} />
 
           <View style={styles.spacing} />
           <TimeCard navigation={navigation} />
 
-          {/* Today Section */}
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Today's Summary</Text>
-            <View style={styles.titleLine} />
-          </View>
-
-          <View style={styles.statsGridRow}>
-            <StatCard title="Check-Ins" value={todayStats.checkIns} />
-            <StatCard title="Check-Outs" value={todayStats.checkOuts} />
-          </View>
-
-          <View style={styles.statsGridRow}>
-            <StatCard title="Synced" value={todayStats.synced} />
-            {todayStats.notSynced > 0 && (
-              <StatCard
-                title="Pending"
-                value={todayStats.notSynced}
-                style={styles.pendingCard}
-              />
-            )}
-          </View>
-
-          {/* Lifetime Section */}
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Lifetime Analytics</Text>
-            <View style={styles.titleLine} />
-          </View>
-
-          <View style={styles.statsGridRow}>
-            <StatCard
-              title="Total In"
-              value={overallStats.totalCheckIns}
-              style={styles.lifetimeIn}
-            />
-            <StatCard
-              title="Total Out"
-              value={overallStats.totalCheckOuts}
-              style={styles.lifetimeOut}
-            />
-          </View>
-
-          {/* Sync Status Integrated Card */}
-          <View style={styles.syncCard}>
-            <View style={styles.syncHeader}>
-              <View>
-                <Text style={styles.syncCardTitle}>Cloud Sync</Text>
-                <Text style={styles.syncSubtitle}>
-                  {isOnline ? 'System Online' : 'Awaiting Connection'}
-                </Text>
-              </View>
-              <View
-                style={[
-                  styles.onlineDot,
-                  { backgroundColor: isOnline ? '#10b981' : '#94a3b8' },
-                ]}
-              />
+          {/* Bottom layout shows a clean loader until APIs return */}
+          {isInitialLoad ? (
+            <View style={styles.loaderContainer}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={styles.loadingText}>Loading workspace...</Text>
             </View>
+          ) : (
+            <View>
+              {/* Today Section */}
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Today's Summary</Text>
+                <View style={styles.titleLine} />
+              </View>
 
-            <View style={styles.syncMetrics}>
-              <View style={styles.metricItem}>
-                <Text style={styles.metricValue}>{overallStats.total}</Text>
-                <Text style={styles.metricLabel}>Total Logs</Text>
+              <View style={styles.statsGridRow}>
+                <StatCard title="Check-Ins" value={todayStats.checkIns} />
+                <StatCard title="Check-Outs" value={todayStats.checkOuts} />
               </View>
-              <View style={styles.metricDivider} />
-              <View style={styles.metricItem}>
-                <Text style={[styles.metricValue, { color: '#10b981' }]}>
-                  {overallStats.synced}
-                </Text>
-                <Text style={styles.metricLabel}>Synced</Text>
-              </View>
-              <View style={styles.metricDivider} />
-              <View style={styles.metricItem}>
-                <Text style={[styles.metricValue, { color: '#f43f5e' }]}>
-                  {overallStats.notSynced}
-                </Text>
-                <Text style={styles.metricLabel}>Pending</Text>
-              </View>
-            </View>
 
-            <View style={styles.progressSection}>
-              <View style={styles.progressInfo}>
-                <Text style={styles.progressPercent}>{syncPercentage}%</Text>
-                <Text style={styles.progressStatus}>Completed</Text>
+              <View style={styles.statsGridRow}>
+                <StatCard title="Synced" value={todayStats.synced} />
+                {todayStats.notSynced > 0 && (
+                  <StatCard
+                    title="Pending"
+                    value={todayStats.notSynced}
+                    style={styles.pendingCard}
+                  />
+                )}
               </View>
-              <View style={styles.progressBg}>
-                <View
-                  style={[styles.progressFill, { width: `${syncPercentage}%` }]}
+
+              {/* Lifetime Section */}
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Lifetime Analytics</Text>
+                <View style={styles.titleLine} />
+              </View>
+
+              <View style={styles.statsGridRow}>
+                <StatCard
+                  title="Total In"
+                  value={overallStats.totalCheckIns}
+                  style={styles.lifetimeIn}
+                />
+                <StatCard
+                  title="Total Out"
+                  value={overallStats.totalCheckOuts}
+                  style={styles.lifetimeOut}
                 />
               </View>
+
+              {/* Sync Status Integrated Card */}
+              <View style={styles.syncCard}>
+                <View style={styles.syncHeader}>
+                  <View>
+                    <Text style={styles.syncCardTitle}>Cloud Sync</Text>
+                    <Text style={styles.syncSubtitle}>
+                      {isOnline ? 'System Online' : 'Awaiting Connection'}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.onlineDot,
+                      { backgroundColor: isOnline ? '#10b981' : '#94a3b8' },
+                    ]}
+                  />
+                </View>
+
+                <View style={styles.syncMetrics}>
+                  <View style={styles.metricItem}>
+                    <Text style={styles.metricValue}>{overallStats.total}</Text>
+                    <Text style={styles.metricLabel}>Total Logs</Text>
+                  </View>
+                  <View style={styles.metricDivider} />
+                  <View style={styles.metricItem}>
+                    <Text style={[styles.metricValue, { color: '#10b981' }]}>
+                      {overallStats.synced}
+                    </Text>
+                    <Text style={styles.metricLabel}>Synced</Text>
+                  </View>
+                  <View style={styles.metricDivider} />
+                  <View style={styles.metricItem}>
+                    <Text style={[styles.metricValue, { color: '#f43f5e' }]}>
+                      {overallStats.notSynced}
+                    </Text>
+                    <Text style={styles.metricLabel}>Pending</Text>
+                  </View>
+                </View>
+
+                <View style={styles.progressSection}>
+                  <View style={styles.progressInfo}>
+                    <Text style={styles.progressPercent}>
+                      {syncPercentage}%
+                    </Text>
+                    <Text style={styles.progressStatus}>Completed</Text>
+                  </View>
+                  <View style={styles.progressBg}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        { width: `${syncPercentage}%` },
+                      ]}
+                    />
+                  </View>
+                </View>
+              </View>
             </View>
-          </View>
+          )}
 
           <View style={{ height: 60 }} />
         </View>
@@ -316,12 +386,12 @@ export default function DashboardScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F1F5F9' },
   contentPadding: { paddingHorizontal: 16 },
-  centered: {
-    flex: 1,
+  loaderContainer: {
+    paddingVertical: 60,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
   },
+  dropdownContainer: { marginBottom: 12 },
   loadingText: { marginTop: 12, color: '#64748B', fontWeight: '500' },
   scroll: { flex: 1 },
   spacing: { height: 12 },
@@ -454,5 +524,18 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: Colors.primary || '#6366F1',
     borderRadius: 4,
+  },
+  iconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  iconInner: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 2,
   },
 });
