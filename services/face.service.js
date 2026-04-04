@@ -66,15 +66,15 @@ export const loadVectorsService = async db => {
     const now = Date.now();
 
     // ⛔ Skip if loaded within last 1 hour
-    // if (storedVersion) {
-    //   const lastLoaded = Number(storedVersion);
-    //   const duration = 5 * 60 * 1000;
+    if (storedVersion) {
+      const lastLoaded = Number(storedVersion);
+      const duration = 5 * 60 * 1000;
 
-    //   if (now - lastLoaded < duration) {
-    //     console.log(`[FACE] Skipping load (${duration})`);
-    //     return false;
-    //   }
-    // }
+      if (now - lastLoaded < duration) {
+        console.log(`[FACE] Skipping load (${duration})`);
+        return false;
+      }
+    }
 
     const currentUser = getCurrentUser();
 
@@ -627,7 +627,7 @@ export const updateFaceService = async ({
         console.warn('Duplicate face detected');
         return {
           status: 'duplicate',
-          message: `Face already registered for employee ${matchedEmployee?.staffid}`,
+          message: `Face already registered for employee ${matchedEmployee?.staffid},  Are you sure to continue?`,
         };
       }
     }

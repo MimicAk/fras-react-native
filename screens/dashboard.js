@@ -5,21 +5,37 @@ import {
   View,
   ScrollView,
   ActivityIndicator,
-  Alert,
   Text,
   RefreshControl,
   Dimensions,
   Platform,
+  TouchableOpacity,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import NetInfo from '@react-native-community/netinfo';
 
+// Lucide Icons
+import {
+  Wifi,
+  WifiOff,
+  LogIn,
+  LogOut,
+  CheckCircle2,
+  Clock,
+  Cloud,
+  RefreshCcw,
+  Database,
+  ArrowRight,
+  TrendingUp,
+} from 'lucide-react-native';
+
 import Colors from '../constants/colors';
 import { Header } from '../components/Header';
 import { LocationCard } from '../components/LocationCard';
 import { TimeCard } from '../components/TimeCard';
-import { StatCard } from '../components/StatCard';
+import { CustomAlert } from '../components/CustomAlert';
 import { useAuth } from '../AuthContext';
 import ProjectDropdown from '../components/ProjectDropdown';
 
@@ -29,30 +45,86 @@ import {
   getOverallSyncStatsService,
 } from '../services/dashboard.service';
 import { config } from '../config/config';
+import { getStaffImage } from '../database/staff.repository';
+import { connectToDatabase } from '../database/connection';
 
 const { width } = Dimensions.get('window');
 
-// Simple Icon Component for the Sync Card
-const SyncIcon = ({ color }) => (
-  <View style={[styles.iconCircle, { backgroundColor: color + '20' }]}>
-    <View style={[styles.iconInner, { borderColor: color }]} />
-  </View>
-);
+const theme = {
+  primary: '#2563EB',
+  primaryLight: '#EFF6FF',
+  success: '#10B981',
+  successLight: '#ECFDF5',
+  warning: '#F59E0B',
+  warningLight: '#FFFBEB',
+  danger: '#EF4444',
+  dangerLight: '#FEF2F2',
+  background: '#F8FAFC',
+  surface: '#FFFFFF',
+  textMain: '#0F172A',
+  textSub: '#64748B',
+  border: '#E2E8F0',
+};
 
-export default function DashboardScreen({
-  navigation,
-  nearyByProject = [],
-  currentLocation,
-}) {
+const MetricCard = ({ label, value, type = 'default', IconComponent }) => {
+  const getStyleConfig = () => {
+    switch (type) {
+      case 'success':
+        return {
+          bg: theme.successLight,
+          iconBg: '#D1FAE5',
+          color: theme.success,
+        };
+      case 'danger':
+        return {
+          bg: theme.dangerLight,
+          iconBg: '#FEE2E2',
+          color: theme.danger,
+        };
+      case 'primary':
+        return {
+          bg: theme.primaryLight,
+          iconBg: '#DBEAFE',
+          color: theme.primary,
+        };
+      default:
+        return { bg: '#F8FAFC', iconBg: '#F1F5F9', color: theme.textSub };
+    }
+  };
+  const cfg = getStyleConfig();
+
+  return (
+    <View style={[styles.metricContainer, { backgroundColor: cfg.bg }]}>
+      <View style={styles.metricHeader}>
+        <View style={[styles.iconWrapper, { backgroundColor: cfg.iconBg }]}>
+          {IconComponent && (
+            <IconComponent size={16} color={cfg.color} strokeWidth={2.5} />
+          )}
+        </View>
+        <Text
+          style={[
+            styles.metricValue,
+            { color: type === 'default' ? theme.textMain : cfg.color },
+          ]}
+        >
+          {value}
+        </Text>
+      </View>
+      <Text style={styles.metricLabel}>{label}</Text>
+    </View>
+  );
+};
+
+export default function DashboardScreen({ navigation, nearyByProject = [] }) {
   const { user, logout } = useAuth();
 
+  // Stats States
   const [todayStats, setTodayStats] = useState({
     checkIns: 0,
     checkOuts: 0,
     synced: 0,
     notSynced: 0,
   });
-
   const [overallStats, setOverallStats] = useState({
     total: 0,
     synced: 0,
@@ -61,71 +133,42 @@ export default function DashboardScreen({
     totalCheckOuts: 0,
   });
 
+  // UI States
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const [userImage, setUserImage] = useState(null);
 
+  const [alertConfig, setAlertConfig] = useState({
+    visible: false,
+    title: '',
+    message: '',
+    showCancel: false,
+    confirmText: 'Got it',
+    onConfirm: null,
+  });
 
-  // FOR API TESTING
-  // useEffect(() => {
-  //   const fetchVectors = async () => {
-  //     try {
-  //       const token = user?.token;
-  //       const userGuid = user?.guid;
-  //       const lastSyncDate = user?.lastSyncDate || '2025-06-01';
-  //       const length = 20;
-  //       const page = 1;
+  const closeAlert = useCallback(
+    () => setAlertConfig(prev => ({ ...prev, visible: false })),
+    [],
+  );
 
-  //       const response = await fetch(`${config.Base_URL}/api/getallvectors`, {
-  //         method: 'POST',
-  //         headers: {
-  //           'Content-Type': 'application/json',
-  //           Authorization: `Bearer ${token}`,
-  //         },
-  //         body: JSON.stringify({
-  //           update_date: lastSyncDate,
-  //           createdby: userGuid,
-  //           length,
-  //           page,
-  //         }),
-  //       });
-
-  //       if (!response.ok) {
-  //         const errorText = await response.text();
-  //         throw new Error(`Vector fetch failed: ${errorText}`);
-  //       }
-
-  //       const json = await response.json();
-  //       const data = json?.data?.data || [];
-  //       const totalCount = json?.data?.total_count || 0;
-
-  //       console.log('Fetched vectors:', data);
-  //       console.log('Total count:', totalCount);
-  //     } catch (err) {
-  //       console.warn('Vector fetch error:', err);
-  //     }
-  //   };
-
-  //   fetchVectors();
-  // }, [user]);
-
+  // Sync Network Listener
   useEffect(() => {
-    const unsubscribe = NetInfo.addEventListener(state => {
-      setIsOnline(state.isConnected ?? true);
-    });
+    const unsubscribe = NetInfo.addEventListener(state =>
+      setIsOnline(state.isConnected ?? true),
+    );
     return unsubscribe;
   }, []);
 
   const loadDashboardData = useCallback(async () => {
     try {
       setLoadError(null);
-      // Fetch stats concurrently
       const [today, overall] = await Promise.all([
         getTodayStatsService(),
         getOverallSyncStatsService(),
       ]);
-
       setTodayStats(
         today ?? { checkIns: 0, checkOuts: 0, synced: 0, notSynced: 0 },
       );
@@ -139,403 +182,463 @@ export default function DashboardScreen({
         },
       );
     } catch (err) {
-      console.warn('[Dashboard] Load failed:', err);
-      setLoadError('Failed to load dashboard data. Pull to retry.');
+      setLoadError('Displaying offline data. Sync recommended.');
     }
   }, []);
-
-  const checkNeedsInitialSync = useCallback(async () => {
-    try {
-      const result = await checkInitialSyncService();
-      if (result?.needsSync) {
-        Alert.alert(
-          'Initial Sync Required',
-          'Please sync your data to continue',
-          [
-            {
-              text: 'Sync Now',
-              onPress: () => navigation.navigate('SyncData'),
-            },
-          ],
-          { cancelable: false },
-        );
-      }
-    } catch (err) {
-      console.warn('[Dashboard] Initial sync check failed:', err);
-    }
-  }, [navigation]);
 
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
 
-      if (!user) return;
-
       const initialize = async () => {
-        // 1. Start fetching stats IMMEDIATELY (Do not wait for transitions)
-        await loadDashboardData();
+        try {
+          // 1. Database & User Image
+          const db = await connectToDatabase();
+          const img = await getStaffImage(db, user?.user?.emp_id);
+          if (isActive) setUserImage(img);
 
-        // 2. Clear loader the exact millisecond stats arrive
-        if (isActive) {
-          setIsInitialLoad(false);
+          console.log(user?.user?.emp_id);
+          console.log(img)
+
+          // 2. Load Stats
+          await loadDashboardData();
+
+          // 3. Check Sync Requirement
+          const syncCheck = await checkInitialSyncService();
+          if (syncCheck?.needsSync && isActive) {
+            setAlertConfig({
+              visible: true,
+              title: 'Sync Required',
+              message: 'Data synchronization is needed to proceed.',
+              confirmText: 'Sync Now',
+              onConfirm: () => {
+                closeAlert();
+                navigation.navigate('SyncData');
+              },
+            });
+          }
+
+          if (isActive) setIsInitialLoad(false);
+        } catch (error) {
+          console.warn('Init Error:', error);
         }
       };
 
       initialize();
-
-      // 3. Fire the background sync check completely separately
-      // so it never blocks the UI from showing the stats.
-      checkNeedsInitialSync();
-
       return () => {
-        isActive = false; // Prevent memory leaks if user navigates away fast
+        isActive = false;
       };
-    }, [user, loadDashboardData, checkNeedsInitialSync]),
+    }, [user, loadDashboardData]),
   );
 
   const onRefresh = async () => {
-    if (!isOnline) {
-      Alert.alert('Offline', 'Cannot refresh while offline.');
-      return;
-    }
     setRefreshing(true);
-    await loadDashboardData(); // Only reload data on pull-to-refresh, don't trigger loader overlay
+    await loadDashboardData();
     setRefreshing(false);
   };
 
-  const handleLogout = useCallback(() => {
-    logout();
-    navigation.navigate('Login');
-  }, [logout, navigation]);
+  const handleForceSync = () => {
+    if (!isOnline) {
+      setAlertConfig({
+        visible: true,
+        title: 'Offline',
+        message: 'Internet connection is required for cloud sync.',
+        confirmText: 'Okay',
+        onConfirm: closeAlert,
+      });
+      return;
+    }
+    navigation.navigate('SyncData');
+  };
 
   const syncPercentage = useMemo(() => {
     if (overallStats.total <= 0) return 0;
     return Math.round((overallStats.synced / overallStats.total) * 100);
   }, [overallStats]);
 
-  const locationName = useMemo(() => {
-    return nearyByProject[0]?.location_shotname ?? 'Detecting location...';
-  }, [nearyByProject]);
-
-  const coordinates = useMemo(() => {
-    const project = nearyByProject[0];
-    return project
-      ? `${project.latitude ?? '0.0'}, ${project.longitude ?? '0.0'}`
-      : '—';
-  }, [nearyByProject]);
+  const locationName =
+    nearyByProject[0]?.location_shotname ?? 'Detecting location...';
+  const coordinates = nearyByProject[0]
+    ? `${nearyByProject[0].latitude ?? '0.0'}, ${
+        nearyByProject[0].longitude ?? '0.0'
+      }`
+    : '—';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <StatusBar barStyle="dark-content" backgroundColor={theme.background} />
+
       <Header
         name={user?.name ?? 'User'}
-        onLogoutPress={handleLogout}
+        userImg={userImage} // Passes the base64 or uri from DB
+        onLogoutPress={logout}
         navigation={navigation}
       />
-
-      {!isOnline && (
-        <View style={styles.offlineBanner}>
-          <Text style={styles.offlineText}>OFFLINE MODE • DATA LOCAL</Text>
-        </View>
-      )}
 
       <ScrollView
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={[Colors.primary]}
-            tintColor={Colors.primary}
+            tintColor={theme.primary}
           />
         }
       >
-        {loadError && (
-          <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>{loadError}</Text>
+        {/* Connection Status Pill */}
+        <View style={styles.connectionWrapper}>
+          <View
+            style={[
+              styles.connectionPill,
+              isOnline ? styles.pillOnline : styles.pillOffline,
+            ]}
+          >
+            {isOnline ? (
+              <Wifi size={12} color={theme.success} strokeWidth={3} />
+            ) : (
+              <WifiOff size={12} color={theme.textSub} strokeWidth={3} />
+            )}
+            <Text
+              style={[
+                styles.connectionText,
+                isOnline ? styles.textOnline : styles.textOffline,
+              ]}
+            >
+              {isOnline ? 'System Online' : 'Offline Mode'}
+            </Text>
+          </View>
+        </View>
+
+        {nearyByProject.length > 1 && (
+          <View style={styles.dropdownContainer}>
+            <ProjectDropdown projectList={nearyByProject} />
           </View>
         )}
 
-        <View style={styles.contentPadding}>
-          {/* Top layout renders instantly from local memory */}
-          {nearyByProject.length > 1 && (
-            <View style={styles.dropdownContainer}>
-              <ProjectDropdown projectList={nearyByProject} />
-            </View>
-          )}
+        <LocationCard location={locationName} coordinates={coordinates} />
+        <View style={styles.spacing} />
+        <TimeCard navigation={navigation} />
 
-          <LocationCard location={locationName} coordinates={coordinates} />
-
-          <View style={styles.spacing} />
-          <TimeCard navigation={navigation} />
-
-          {/* Bottom layout shows a clean loader until APIs return */}
-          {isInitialLoad ? (
-            <View style={styles.loaderContainer}>
-              <ActivityIndicator size="large" color={Colors.primary} />
-              <Text style={styles.loadingText}>Loading workspace...</Text>
-            </View>
-          ) : (
-            <View>
-              {/* Today Section */}
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Today's Summary</Text>
-                <View style={styles.titleLine} />
+        {isInitialLoad ? (
+          <View style={styles.loaderContainer}>
+            <ActivityIndicator size="small" color={theme.primary} />
+            <Text style={styles.loadingText}>Syncing Workspace...</Text>
+          </View>
+        ) : (
+          <View style={styles.mainContent}>
+            {/* Analytics Panel */}
+            <View style={styles.modernCard}>
+              <View style={styles.cardHeader}>
+                <View style={styles.headerIconBg}>
+                  <TrendingUp size={18} color={theme.primary} />
+                </View>
+                <Text style={styles.cardTitle}>Activity Summary</Text>
               </View>
 
-              <View style={styles.statsGridRow}>
-                <StatCard title="Check-Ins" value={todayStats.checkIns} />
-                <StatCard title="Check-Outs" value={todayStats.checkOuts} />
+              <Text style={styles.subSectionTitle}>TODAY</Text>
+              <View style={styles.metricGrid}>
+                <MetricCard
+                  label="In"
+                  value={todayStats.checkIns}
+                  type="primary"
+                  IconComponent={LogIn}
+                />
+                <MetricCard
+                  label="Out"
+                  value={todayStats.checkOuts}
+                  IconComponent={LogOut}
+                />
+                <MetricCard
+                  label="Synced"
+                  value={todayStats.synced}
+                  type="success"
+                  IconComponent={CheckCircle2}
+                />
+                <MetricCard
+                  label="Local"
+                  value={todayStats.notSynced}
+                  type={todayStats.notSynced > 0 ? 'danger' : 'default'}
+                  IconComponent={Clock}
+                />
               </View>
 
-              <View style={styles.statsGridRow}>
-                <StatCard title="Synced" value={todayStats.synced} />
-                {todayStats.notSynced > 0 && (
-                  <StatCard
-                    title="Pending"
-                    value={todayStats.notSynced}
-                    style={styles.pendingCard}
-                  />
-                )}
-              </View>
+              <View style={styles.divider} />
 
-              {/* Lifetime Section */}
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Lifetime Analytics</Text>
-                <View style={styles.titleLine} />
-              </View>
-
-              <View style={styles.statsGridRow}>
-                <StatCard
-                  title="Total In"
+              <Text style={styles.subSectionTitle}>LIFETIME TOTALS</Text>
+              <View style={styles.metricGrid}>
+                <MetricCard
+                  label="Check-Ins"
                   value={overallStats.totalCheckIns}
-                  style={styles.lifetimeIn}
+                  IconComponent={LogIn}
                 />
-                <StatCard
-                  title="Total Out"
+                <MetricCard
+                  label="Check-Outs"
                   value={overallStats.totalCheckOuts}
-                  style={styles.lifetimeOut}
+                  IconComponent={LogOut}
                 />
               </View>
+            </View>
 
-              {/* Sync Status Integrated Card */}
-              <View style={styles.syncCard}>
-                <View style={styles.syncHeader}>
-                  <View>
-                    <Text style={styles.syncCardTitle}>Cloud Sync</Text>
-                    <Text style={styles.syncSubtitle}>
-                      {isOnline ? 'System Online' : 'Awaiting Connection'}
-                    </Text>
-                  </View>
+            {/* Sync Progress Panel */}
+            <View style={styles.modernCard}>
+              <View style={styles.cardHeader}>
+                <View
+                  style={[
+                    styles.headerIconBg,
+                    { backgroundColor: theme.successLight },
+                  ]}
+                >
+                  <Cloud size={18} color={theme.success} />
+                </View>
+                <Text style={styles.cardTitle}>Cloud Connectivity</Text>
+              </View>
+
+              <View style={styles.syncOverview}>
+                <View style={styles.syncDataCol}>
+                  <Text style={styles.syncDataValue}>{overallStats.total}</Text>
+                  <Text style={styles.syncDataLabel}>Logs</Text>
+                </View>
+                <View style={styles.syncDataDivider} />
+                <View style={styles.syncDataCol}>
+                  <Text
+                    style={[styles.syncDataValue, { color: theme.success }]}
+                  >
+                    {overallStats.synced}
+                  </Text>
+                  <Text style={styles.syncDataLabel}>Cloud</Text>
+                </View>
+                <View style={styles.syncDataDivider} />
+                <View style={styles.syncDataCol}>
+                  <Text style={[styles.syncDataValue, { color: theme.danger }]}>
+                    {overallStats.notSynced}
+                  </Text>
+                  <Text style={styles.syncDataLabel}>Pending</Text>
+                </View>
+              </View>
+
+              <View style={styles.progressBarContainer}>
+                <View style={styles.progressTextRow}>
+                  <Text style={styles.progressLabel}>Health Index</Text>
+                  <Text style={styles.progressPercent}>{syncPercentage}%</Text>
+                </View>
+                <View style={styles.progressTrack}>
                   <View
                     style={[
-                      styles.onlineDot,
-                      { backgroundColor: isOnline ? '#10b981' : '#94a3b8' },
+                      styles.progressFill,
+                      { width: `${syncPercentage}%` },
                     ]}
                   />
                 </View>
-
-                <View style={styles.syncMetrics}>
-                  <View style={styles.metricItem}>
-                    <Text style={styles.metricValue}>{overallStats.total}</Text>
-                    <Text style={styles.metricLabel}>Total Logs</Text>
-                  </View>
-                  <View style={styles.metricDivider} />
-                  <View style={styles.metricItem}>
-                    <Text style={[styles.metricValue, { color: '#10b981' }]}>
-                      {overallStats.synced}
-                    </Text>
-                    <Text style={styles.metricLabel}>Synced</Text>
-                  </View>
-                  <View style={styles.metricDivider} />
-                  <View style={styles.metricItem}>
-                    <Text style={[styles.metricValue, { color: '#f43f5e' }]}>
-                      {overallStats.notSynced}
-                    </Text>
-                    <Text style={styles.metricLabel}>Pending</Text>
-                  </View>
-                </View>
-
-                <View style={styles.progressSection}>
-                  <View style={styles.progressInfo}>
-                    <Text style={styles.progressPercent}>
-                      {syncPercentage}%
-                    </Text>
-                    <Text style={styles.progressStatus}>Completed</Text>
-                  </View>
-                  <View style={styles.progressBg}>
-                    <View
-                      style={[
-                        styles.progressFill,
-                        { width: `${syncPercentage}%` },
-                      ]}
-                    />
-                  </View>
-                </View>
               </View>
             </View>
-          )}
+          </View>
+        )}
 
-          <View style={{ height: 60 }} />
+        {/* Action Panel */}
+        <View style={styles.actionPanel}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleForceSync}
+            activeOpacity={0.7}
+          >
+            <View style={styles.actionButtonLeft}>
+              <View style={styles.actionIconWrapper}>
+                <RefreshCcw size={20} color={theme.primary} />
+              </View>
+              <View>
+                <Text style={styles.actionButtonText}>Maintenance Sync</Text>
+                <Text style={styles.actionButtonSub}>
+                  Refresh and optimize workspace
+                </Text>
+              </View>
+            </View>
+            <ArrowRight size={18} color={theme.textSub} />
+          </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <CustomAlert
+        visible={alertConfig.visible}
+        title={alertConfig.title}
+        message={alertConfig.message}
+        confirmText={alertConfig.confirmText}
+        onConfirm={alertConfig.onConfirm}
+        onClose={closeAlert}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F1F5F9' },
-  contentPadding: { paddingHorizontal: 16 },
+  container: { flex: 1, backgroundColor: theme.background },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 10 },
+  spacing: { height: 16 },
+  mainContent: { marginTop: 8 },
+  dropdownContainer: { marginBottom: 16 },
+
+  connectionWrapper: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  connectionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  pillOnline: { backgroundColor: theme.successLight, borderColor: '#A7F3D0' },
+  pillOffline: { backgroundColor: '#F1F5F9', borderColor: theme.border },
+  connectionText: {
+    fontSize: 11,
+    fontWeight: '700',
+    marginLeft: 4,
+    letterSpacing: 0.2,
+  },
+  textOnline: { color: theme.success },
+  textOffline: { color: theme.textSub },
+
   loaderContainer: {
     paddingVertical: 60,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  dropdownContainer: { marginBottom: 12 },
-  loadingText: { marginTop: 12, color: '#64748B', fontWeight: '500' },
-  scroll: { flex: 1 },
-  spacing: { height: 12 },
-
-  offlineBanner: {
-    backgroundColor: '#0F172A',
-    paddingVertical: 6,
-    alignItems: 'center',
-  },
-  offlineText: {
-    color: '#F1F5F9',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
+  loadingText: {
+    marginTop: 12,
+    color: theme.textSub,
+    fontWeight: '500',
+    fontSize: 14,
   },
 
-  errorBanner: {
-    backgroundColor: '#FEE2E2',
-    margin: 16,
-    borderRadius: 8,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#FCA5A5',
-  },
-  errorText: { color: '#B91C1C', fontSize: 13, textAlign: 'center' },
-
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 28,
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#475569',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginRight: 10,
-  },
-  titleLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#E2E8F0',
-  },
-
-  statsGridRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  pendingCard: {
-    borderLeftWidth: 4,
-    borderLeftColor: '#F43F5E',
-  },
-  lifetimeIn: {
-    backgroundColor: '#F0FDF4',
-    borderColor: '#DCFCE7',
-    borderWidth: 1,
-  },
-  lifetimeOut: {
-    backgroundColor: '#FFF7ED',
-    borderColor: '#FFEDD5',
-    borderWidth: 1,
-  },
-
-  syncCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
+  modernCard: {
+    backgroundColor: theme.surface,
+    borderRadius: 20,
     padding: 20,
-    marginTop: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.6)',
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: '#64748B',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.05,
-        shadowRadius: 12,
+        shadowRadius: 10,
       },
-      android: { elevation: 3 },
+      android: { elevation: 2 },
     }),
   },
-  syncHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 20,
+  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  headerIconBg: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: theme.primaryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
   },
-  syncCardTitle: { fontSize: 18, fontWeight: '800', color: '#1E293B' },
-  syncSubtitle: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
-  onlineDot: { width: 8, height: 8, borderRadius: 4, marginTop: 6 },
+  cardTitle: { fontSize: 17, fontWeight: '800', color: theme.textMain },
 
-  syncMetrics: {
+  subSectionTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: theme.textSub,
+    letterSpacing: 1,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+  },
+  divider: { height: 1, backgroundColor: theme.border, marginVertical: 20 },
+
+  metricGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  metricContainer: {
+    flex: 1,
+    minWidth: '45%',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.01)',
+  },
+  metricHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  iconWrapper: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  metricValue: { fontSize: 18, fontWeight: '800' },
+  metricLabel: { fontSize: 12, color: theme.textSub, fontWeight: '600' },
+
+  syncOverview: {
     flexDirection: 'row',
     backgroundColor: '#F8FAFC',
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 14,
+    paddingVertical: 14,
+    marginBottom: 16,
   },
-  metricItem: { flex: 1, alignItems: 'center' },
-  metricValue: { fontSize: 20, fontWeight: '800', color: '#334155' },
-  metricLabel: {
+  syncDataCol: { flex: 1, alignItems: 'center' },
+  syncDataValue: { fontSize: 20, fontWeight: '800', color: theme.textMain },
+  syncDataLabel: {
     fontSize: 10,
-    color: '#64748B',
+    color: theme.textSub,
     fontWeight: '700',
+    marginTop: 2,
     textTransform: 'uppercase',
-    marginTop: 4,
   },
-  metricDivider: {
-    width: 1,
-    height: 30,
-    backgroundColor: '#E2E8F0',
-    alignSelf: 'center',
-  },
+  syncDataDivider: { width: 1, backgroundColor: theme.border },
 
-  progressSection: { marginTop: 20 },
-  progressInfo: {
+  progressBarContainer: { width: '100%' },
+  progressTextRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 8,
+    marginBottom: 6,
   },
-  progressPercent: { fontSize: 22, fontWeight: '900', color: '#1E293B' },
-  progressStatus: { fontSize: 12, color: '#64748B', fontWeight: '600' },
-  progressBg: {
-    height: 8,
-    backgroundColor: '#E2E8F0',
-    borderRadius: 4,
+  progressLabel: { fontSize: 12, color: theme.textMain, fontWeight: '700' },
+  progressPercent: { fontSize: 12, color: theme.primary, fontWeight: '800' },
+  progressTrack: {
+    height: 6,
+    backgroundColor: theme.primaryLight,
+    borderRadius: 3,
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
-    backgroundColor: Colors.primary || '#6366F1',
-    borderRadius: 4,
+    backgroundColor: theme.primary,
+    borderRadius: 3,
   },
-  iconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+
+  actionPanel: { marginTop: 4 },
+  actionButton: {
+    backgroundColor: theme.surface,
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  actionButtonLeft: { flexDirection: 'row', alignItems: 'center' },
+  actionIconWrapper: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 12,
   },
-  iconInner: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
+  actionButtonText: { fontSize: 15, fontWeight: '700', color: theme.textMain },
+  actionButtonSub: {
+    fontSize: 12,
+    color: theme.textSub,
+    marginTop: 2,
+    fontWeight: '500',
   },
 });

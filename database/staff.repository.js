@@ -111,7 +111,7 @@ export const searchStaff = async (db, searchTerm) => {
 export const getStaffImage = async (db, uuid) => {
   const result = await fetchOne(
     db,
-    `SELECT img FROM facevector WHERE uuid = ?`,
+    `SELECT img FROM facevector WHERE staffid = ?`,
     [uuid],
   );
 
@@ -244,12 +244,16 @@ export const getStaffByCreatedBy = async (db, createdBy) => {
       [createdBy],
     );
 
-    
-
     return rows;
-
   } catch (error) {
     console.error('[StaffRepo] getStaffByCreatedBy error:', error);
     return [];
   }
+};
+
+/**
+ * Truncate the facevector table (delete all staff records)
+ */
+export const truncateStaffTable = async db => {
+  return execute(db, `DELETE FROM facevector`);
 };

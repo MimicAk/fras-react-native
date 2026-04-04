@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { config } from '../config/config';
 import { connectToDatabase } from '../database/connection';
 import { createTables } from '../database/schema';
-import { addStaff } from '../database/staff.repository';
+import { addStaff, truncateStaffTable } from '../database/staff.repository';
 import {
   getAllStaffNotSync,
   markStaffSynced,
@@ -16,7 +16,8 @@ import {
 export const pullVectorsService = async ({ token, userGuid, onProgress }) => {
   const db = await connectToDatabase();
   await createTables(db);
-
+  await truncateStaffTable(db);
+  
   let page = 1;
   const length = 50;
   let totalCount = 0;
