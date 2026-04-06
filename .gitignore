@@ -79,3 +79,4 @@ RND
 *.zip
 *.log
 *.debug
+*.db
