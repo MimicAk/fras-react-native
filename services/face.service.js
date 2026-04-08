@@ -25,6 +25,7 @@ const getFaceSettings = () => ({
   duplicateThreshold: getSetting('ENROLLMENT_DUPLICATE_THRESHOLD'),
   updateThreshold: getSetting('TEMPLATE_UPDATE_THRESHOLD'),
   batchSize: getSetting('BATCH_SIZE'),
+  captureCount: getSetting('CAPTURE_COUNT'),
 });
 
 // VECTOR STORAGE KEY
@@ -376,102 +377,69 @@ export const recognizeFaceService = async ({ cameraRef, switchCamera }) => {
       throw new Error('No enrolled faces available');
     }
 
-    const now = Date.now();
+    // Pull the dynamic capture count setting (1, 2, or 3)
+    const { captureCount } = getFaceSettings();
+    const photos = [];
+    const embeddings = [];
 
-    // ─── Try cache first ───
-    // if (
-    //   lastEmbedding &&
-    //   now - lastEmbeddingTimestamp < EMBEDDING_CACHE_TTL_MS
-    // ) {
-    //   console.log(
-    //     '[CACHE HIT] Reusing embedding from',
-    //     (now - lastEmbeddingTimestamp) / 1000,
-    //     'seconds ago',
-    //   );
+    // ─── 1. CAPTURE PHASE ───
+    for (let i = 0; i < captureCount; i++) {
+      // Add a small delay between snaps to stabilize sensor (skip on first snap)
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
 
-    //   const { matches, bestScore } = await findMatchesInBatches(lastEmbedding);
-
-    //   if (matches.length === 0) {
-    //     return {
-    //       status: 'no_match',
-    //       message: `Face not recognized (${(bestScore * 100).toFixed(
-    //         1,
-    //       )}% match)`,
-    //     };
-    //   }
-
-    //   if (matches.length === 1) {
-    //     return {
-    //       status: 'single',
-    //       employee: matches[0],
-    //     };
-    //   }
-
-    //   return {
-    //     status: 'multiple',
-    //     matches,
-    //   };
-    // }
-
-    // Capture fast photo
-    const photo = await cameraRef.current.takePhoto({
-      flash: 'off',
-      qualityPrioritization: 'speed',
-    });
-
-    await new Promise(resolve => setTimeout(resolve, 150));
-
-    const photo2 = await cameraRef.current.takePhoto({
-      flash: 'off',
-      qualityPrioritization: 'speed',
-    });
-
-    const filePath = photo.path.startsWith('file://')
-      ? photo.path
-      : `file://${photo.path}`;
-
-    const filePath2 = photo2.path.startsWith('file://')
-      ? photo2.path
-      : `file://${photo2.path}`;
-
-    // Get embedding
-    const emb1 = await getFaceEmbeddingFromImage(
-      filePath,
-      switchCamera ? 'front' : 'back',
-    );
-
-    // small delay to stabilize sensor
-    await new Promise(r => setTimeout(r, 60));
-
-    const emb2 = await getFaceEmbeddingFromImage(
-      filePath2,
-      switchCamera ? 'front' : 'back',
-    );
-
-    if (
-      !emb1 ||
-      !emb2 ||
-      typeof emb1 === 'string' ||
-      typeof emb2 === 'string'
-    ) {
-      throw new Error('Face not detected properly');
+      const photo = await cameraRef.current.takePhoto({
+        flash: 'off',
+        qualityPrioritization: 'speed',
+      });
+      photos.push(photo);
     }
 
-    // average embeddings
-    const rawEmbedding = emb1.map((v, i) => (v + emb2[i]) / 2);
+    // ─── 2. EMBEDDING PHASE ───
+    for (let i = 0; i < photos.length; i++) {
+      // Small delay to stabilize processing thread (skip on first embedding)
+      if (i > 0) {
+        await new Promise(r => setTimeout(r, 60));
+      }
 
-    // lastEmbedding = embedding;
-    // lastEmbeddingTimestamp = now;
+      const filePath = photos[i].path.startsWith('file://')
+        ? photos[i].path
+        : `file://${photos[i].path}`;
+
+      const emb = await getFaceEmbeddingFromImage(
+        filePath,
+        switchCamera ? 'front' : 'back',
+      );
+
+      if (!emb || typeof emb === 'string') {
+        throw new Error(`Face not detected properly on snap ${i + 1}`);
+      }
+
+      embeddings.push(emb);
+    }
+
+    // ─── 3. AVERAGING PHASE ───
+    let rawEmbedding = embeddings[0];
+
+    // If more than 1 snap, average them dynamically
+    if (embeddings.length > 1) {
+      rawEmbedding = rawEmbedding.map((val, idx) => {
+        let sum = val;
+        for (let j = 1; j < embeddings.length; j++) {
+          sum += embeddings[j][idx];
+        }
+        return sum / embeddings.length;
+      });
+    }
 
     const embedding = normalizeVector(rawEmbedding);
-
-    // console.log(rawEmbedding, embedding);
 
     if (!embedding || typeof embedding === 'string') {
       throw new Error('No valid face detected in capture');
     }
 
-    // Find matches
+    // ─── 4. MATCHING PHASE ───
     const { matches, bestScore } = await findMatchesInBatches(embedding);
 
     if (matches.length === 0) {
@@ -495,9 +463,6 @@ export const recognizeFaceService = async ({ cameraRef, switchCamera }) => {
       embedding: embedding,
     };
   } catch (error) {
-    // lastEmbedding = null;
-    // lastEmbeddingTimestamp = 0;
-
     return {
       status: 'error',
       message: error.message || 'Recognition failed',

@@ -1,5 +1,11 @@
 // screens/FaceEnrollmentScreen.js
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
 import {
   View,
   Text,
@@ -21,25 +27,58 @@ import {
 
 import RNFS from 'react-native-fs';
 
+import { getSetting } from '../utils/settings.helper';
+
 const { width, height } = Dimensions.get('window');
 
-const CAPTURE_STEPS = [
-  { id: 1, title: 'Neutral Expression', desc: 'Look straight at the camera.' },
-  { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
-  // { id: 3, title: 'Look Left', desc: 'Turn your head slightly to the left.' },
-  // { id: 4, title: 'Look Right', desc: 'Turn your head slightly to the right.' },
-  { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
-];
+// ────────────────────────────────────────────────
+//  DYNAMIC ENROLLMENT STEPS
+// ────────────────────────────────────────────────
+const captureCount = getSetting('ENROLLMENT_CAPTURE_COUNT') || 3;
+
+const CAPTURE_STEPS = useMemo(() => {
+  if (captureCount === 5) {
+    return [
+      {
+        id: 1,
+        title: 'Neutral Expression',
+        desc: 'Look straight at the camera.',
+      },
+      { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
+      {
+        id: 3,
+        title: 'Look Left',
+        desc: 'Turn your head slightly to the left.',
+      },
+      {
+        id: 4,
+        title: 'Look Right',
+        desc: 'Turn your head slightly to the right.',
+      },
+      { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
+    ];
+  }
+  // Default to 3 snaps
+  return [
+    {
+      id: 1,
+      title: 'Neutral Expression',
+      desc: 'Look straight at the camera.',
+    },
+    { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
+    { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
+  ];
+}, [captureCount]);
 
 const SwitchIcon = () => (
   <View style={styles.iconContainer}>
-    <View style={[styles.arrow, { transform: [{ rotate: '0deg' }] }]} />
-    <View
-      style={[
-        styles.arrow,
-        { transform: [{ rotate: '180deg' }], marginTop: -4 },
-      ]}
-    />
+    {/* Top Curved Arrow */}
+    <View style={styles.curveTop} />
+    <View style={[styles.arrowHead, styles.arrowHeadTop]} />
+
+    {/* Bottom Curved Arrow */}
+    <View style={styles.curveBottom} />
+    <View style={[styles.arrowHead, styles.arrowHeadBottom]} />
   </View>
 );
 
@@ -569,4 +608,55 @@ const styles = StyleSheet.create({
     borderBottomColor: 'white',
   },
   errorText: { color: '#ef4444', fontSize: 16 },
+
+  iconContainer: {
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    transform: [{ rotate: '45deg' }], // Tilts the arrows nicely
+  },
+  curveTop: {
+    position: 'absolute',
+    top: 2,
+    width: 18,
+    height: 10,
+    borderTopWidth: 2.5,
+    borderRightWidth: 2.5,
+    borderColor: '#ffffff',
+    borderTopRightRadius: 10,
+    borderTopLeftRadius: 10,
+  },
+  curveBottom: {
+    position: 'absolute',
+    bottom: 2,
+    width: 18,
+    height: 10,
+    borderBottomWidth: 2.5,
+    borderLeftWidth: 2.5,
+    borderColor: '#ffffff',
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+  },
+  arrowHead: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    borderLeftWidth: 4,
+    borderRightWidth: 4,
+    borderBottomWidth: 6,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: '#ffffff',
+  },
+  arrowHeadTop: {
+    top: 9,
+    right: 0,
+    transform: [{ rotate: '180deg' }],
+  },
+  arrowHeadBottom: {
+    bottom: 9,
+    left: 0,
+    transform: [{ rotate: '0deg' }],
+  },
 });

@@ -57,6 +57,20 @@ export const SETTINGS_CONFIG = [
     description: 'Threshold for successful check-in updates.',
   },
   {
+    key: 'ENROLLMENT_CAPTURE_COUNT',
+    label: 'Enrollment Snaps',
+    group: 'Recognition, Matching & Enrollment',
+    icon: 'Camera',
+    default: 3,
+    type: 'int',
+    inputType: 'dropdown',
+    options: [
+      { label: '3 Snaps (Fast Enrollment)', value: 3 },
+      { label: '5 Snaps (High Accuracy)', value: 5 },
+    ],
+    description: 'Number of facial angles required during new enrollment.',
+  },
+  {
     key: 'BATCH_SIZE',
     label: 'Matching Batch Size',
     group: 'Performance',
@@ -71,6 +85,21 @@ export const SETTINGS_CONFIG = [
       { label: '5000 (Max Speed, UI Blocking)', value: 5000 },
     ],
     description: 'Number of vectors processed per loop yield.',
+  },
+  {
+    key: 'CAPTURE_COUNT',
+    label: 'Verification Snaps',
+    group: 'Performance',
+    icon: 'Camera',
+    default: 2,
+    type: 'int',
+    inputType: 'dropdown',
+    options: [
+      { label: '1 Snap (Fast, Lower Accuracy)', value: 1 },
+      { label: '2 Snaps (Balanced, Good Accuracy)', value: 2 },
+      { label: '3 Snaps (Slow, Max Accuracy)', value: 3 },
+    ],
+    description: 'Number of consecutive photos to average for recognition.',
   },
 ];
 

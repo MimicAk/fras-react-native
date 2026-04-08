@@ -29,6 +29,7 @@ import {
   Save,
   ArrowLeft,
   Settings2,
+  Camera
 } from 'lucide-react-native';
 
 import {
@@ -51,6 +52,7 @@ const IconMap = {
   Users,
   RefreshCcw,
   Cpu,
+  Camera
 };
 
 // Upgraded Premium Theme
