@@ -53,7 +53,7 @@ export default function RoleSelectionScreen({ navigation }) {
 
     setTimeout(() => {
       navigation.replace('Login');
-    }, 1000);
+    }, 500);
   };
 
   // Helper to safely render roles

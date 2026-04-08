@@ -10,7 +10,13 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
-import { UserCircle, LogOut, ChevronDown, Repeat } from 'lucide-react-native';
+import {
+  UserCircle,
+  LogOut,
+  ChevronDown,
+  Repeat,
+  Settings,
+} from 'lucide-react-native';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -127,7 +133,20 @@ export function Header({
               onPress={() => {
                 setDropdownVisible(false);
                 setTimeout(() => {
-                  navigation.replace('RoleSelection');
+                  navigation.navigate('SettingsScreen');
+                }, 100);
+              }}
+            >
+              <Settings size={18} color="#64748B" />
+              <Text style={styles.dropdownText}>Settings</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={() => {
+                setDropdownVisible(false);
+                setTimeout(() => {
+                  navigation.navigate('RoleSelection');
                 }, 100);
               }}
             >

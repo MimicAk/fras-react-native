@@ -52,7 +52,7 @@ export const startForegroundSyncService = (userToken, user) => {
   NetInfo.addEventListener(state => {
     if (state.isConnected) {
       runBackgroundSync(userToken);
-      startVectorPullBackground(userToken, user?.guid);
+      // startVectorPullBackground(userToken, user?.guid);
     }
   });
 
@@ -74,7 +74,7 @@ export const startForegroundSyncService = (userToken, user) => {
       syncVectorBackground(userToken, user?.guid);
     }, 1 * 60 * 1000);
 
-    startVectorPullBackground(userToken, user?.guid);
+    // startVectorPullBackground(userToken, user?.guid);
   }
 };
 

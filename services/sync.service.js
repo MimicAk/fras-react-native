@@ -50,6 +50,9 @@ export const pullVectorsService = async ({ token, userGuid, onProgress }) => {
     const data = json?.data?.data || [];
     totalCount = json?.data?.total_count || 0;
 
+    console.log(data)
+    
+
     if (data.length === 0) break;
 
     // 🔥 FIX: Execute all inserts properly in a transaction
@@ -176,6 +179,8 @@ export const syncVectorsPullOnly = async ({ token, userGuid, onProgress }) => {
       const json = await response.json();
       const data = json?.data?.data || [];
       totalCount = json?.data?.total_count || 0;
+
+      console.log(data);
 
       if (!data.length) break;
 

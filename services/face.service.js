@@ -14,15 +14,18 @@ import {
 import { faceIndexManager } from '../utils/hnswIndex';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSetting } from '../utils/settings.helper';
+
 // ────────────────────────────────────────────────
 //  CONFIGURATION
 // ────────────────────────────────────────────────
-const FACE_MATCH_THRESHOLD = 0.6;
-
-const RECOGNITION_THRESHOLD = 0.55; //FOR DAILY CHECKIN & CHECKOUT
-const ENROLLMENT_DUPLICATE_THRESHOLD = 0.75; // FOR DUPLICATE CHECKS
-const TEMPLATE_UPDATE_THRESHOLD = 0.6; // DAILY SUCCESSFULL CHECKIN UPDATE
-const BATCH_SIZE = 3500;
+const getFaceSettings = () => ({
+  matchThreshold: getSetting('FACE_MATCH_THRESHOLD'),
+  recognitionThreshold: getSetting('RECOGNITION_THRESHOLD'),
+  duplicateThreshold: getSetting('ENROLLMENT_DUPLICATE_THRESHOLD'),
+  updateThreshold: getSetting('TEMPLATE_UPDATE_THRESHOLD'),
+  batchSize: getSetting('BATCH_SIZE'),
+});
 
 // VECTOR STORAGE KEY
 const VECTOR_VERSION_KEY = 'FACE_VECTOR_VERSION';
@@ -66,15 +69,15 @@ export const loadVectorsService = async db => {
     const now = Date.now();
 
     // ⛔ Skip if loaded within last 1 hour
-    if (storedVersion) {
-      const lastLoaded = Number(storedVersion);
-      const duration = 5 * 60 * 1000;
+    // if (storedVersion) {
+    //   const lastLoaded = Number(storedVersion);
+    //   const duration = 5 * 60 * 1000;
 
-      if (now - lastLoaded < duration) {
-        console.log(`[FACE] Skipping load (${duration})`);
-        return false;
-      }
-    }
+    //   if (now - lastLoaded < duration) {
+    //     console.log(`[FACE] Skipping load (${duration})`);
+    //     return false;
+    //   }
+    // }
 
     const currentUser = getCurrentUser();
 
@@ -116,14 +119,36 @@ export const loadVectorsService = async db => {
 
 const mapVectorData = list => {
   return list
-    .filter(item => item?.vector && item.vector !== 'null' && item.uuid)
+    .filter(
+      item =>
+        item?.vector &&
+        item.vector !== 'null' &&
+        item.uuid &&
+        item.staffid !== '',
+    )
     .map(item => {
       const parsedAvg = safeParse(item.vector);
       let parsedVectors = safeParse(item.vectors);
 
+      console.log(typeof item.vector);
+      console.log(item.vector.length);
+      console.log('parsed');
+
+      // console.log(parsedVectors);
+      console.log(parsedAvg.length);
+
+      if (
+        Array.isArray(parsedAvg) &&
+        parsedAvg.length === 1 &&
+        Array.isArray(parsedAvg[0])
+      ) {
+        parsedAvg = parsedAvg[0];
+      }
+
       if (!Array.isArray(parsedVectors)) parsedVectors = [];
 
       if (parsedVectors.length === 0 && parsedAvg.length === 512) {
+        console.error('❌ INVALID AVG VECTOR:', parsedAvg);
         parsedVectors = [parsedAvg];
       }
 
@@ -137,7 +162,14 @@ const mapVectorData = list => {
 
 const safeParse = val => {
   try {
-    return typeof val === 'string' ? JSON.parse(val) : val;
+    let parsed = typeof val === 'string' ? JSON.parse(val) : val;
+
+    // 🔥 DOUBLE PARSE FIX
+    if (typeof parsed === 'string') {
+      parsed = JSON.parse(parsed);
+    }
+
+    return parsed;
   } catch {
     return [];
   }
@@ -147,41 +179,37 @@ const safeParse = val => {
 //  COSINE SIMILARITY
 // ────────────────────────────────────────────────
 const cosineSimilarity = (a, b) => {
-  if (!a || !b || a.length !== b.length) return 0;
+  if (!a || !b || a.length !== 512 || b.length !== 512) return 0;
 
   let dot = 0;
   let magA = 0;
   let magB = 0;
 
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    magA += a[i] * a[i];
-    magB += b[i] * b[i];
+  for (let i = 0; i < 512; i++) {
+    const valA = a[i];
+    const valB = b[i];
+    dot += valA * valB;
+    magA += valA * valA;
+    magB += valB * valB;
   }
 
-  const magnitude = Math.sqrt(magA * magB);
-  return magnitude === 0 ? 0 : dot / magnitude;
+  const magnitude = Math.sqrt(magA * magB) + 1e-10;
+  return dot / magnitude;
 };
 
 const getBestSimilarity = (query, vectors = []) => {
-  if (!vectors.length) return 0;
+  if (!vectors || !vectors.length) return 0;
 
   let best = 0;
-  let second = 0;
 
   for (const v of vectors) {
     const sim = cosineSimilarity(query, v);
-
     if (sim > best) {
-      second = best;
       best = sim;
-    } else if (sim > second) {
-      second = sim;
     }
   }
 
-  // slight boost instead of reduction
-  return best * 0.85 + second * 0.15;
+  return best;
 };
 
 // NORMALIZE VECTOR
@@ -207,6 +235,7 @@ export const blendAndNormalizeVectors = (oldVector, newVector, alpha = 0.9) => {
 //   BATCHED MATCHING (with Linear Fallback)
 // ────────────────────────────────────────────────
 const findMatchesInBatches = async queryEmbedding => {
+  const { recognitionThreshold } = getFaceSettings();
   const normalizedQuery = queryEmbedding; //already normalized
 
   return oldLinearSearch(normalizedQuery);
@@ -244,7 +273,7 @@ const findMatchesInBatches = async queryEmbedding => {
     // Assuming distance is inner product / cosine distance (1 - similarity)
     const similarity = distances[pos];
 
-    if (similarity >= RECOGNITION_THRESHOLD) {
+    if (similarity >= recognitionThreshold) {
       matches.push({
         uuid: item.uuid,
         name: item.name,
@@ -259,6 +288,7 @@ const findMatchesInBatches = async queryEmbedding => {
 };
 
 const oldLinearSearch = async embedding => {
+  const { batchSize, updateThreshold, matchThreshold } = getFaceSettings();
   SEARCH_COUNT++;
 
   const useUserOnly = SEARCH_COUNT <= USER_ONLY_SEARCH_LIMIT;
@@ -270,8 +300,8 @@ const oldLinearSearch = async embedding => {
   let bestScore = 0;
   let bestMatch = null;
 
-  for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
-    const end = Math.min(i + BATCH_SIZE, vectors.length);
+  for (let i = 0; i < vectors.length; i += batchSize) {
+    const end = Math.min(i + batchSize, vectors.length);
 
     // Yield to event loop
     if (i > 0) {
@@ -306,10 +336,7 @@ const oldLinearSearch = async embedding => {
       }
 
       // Add match
-      if (
-        similarity >= TEMPLATE_UPDATE_THRESHOLD &&
-        similarity > FACE_MATCH_THRESHOLD
-      ) {
+      if (similarity >= updateThreshold && similarity > matchThreshold) {
         matches.push({
           uuid: item.uuid,
           name: item.name,
@@ -489,6 +516,8 @@ export const enrollFaceService = async ({
   cameraType,
 }) => {
   try {
+    const { matchThreshold } = getFaceSettings();
+
     if (!db) throw new Error('Database not initialized');
     if (!staffData?.guid || !staffData?.user?.emp_id) {
       throw new Error('Invalid staff information');
@@ -519,11 +548,11 @@ export const enrollFaceService = async ({
       }
 
       // Early exit if strong match found
-      if (similarity >= FACE_MATCH_THRESHOLD) break;
+      if (similarity >= matchThreshold) break;
     }
 
     if (
-      highestScore >= FACE_MATCH_THRESHOLD &&
+      highestScore >= matchThreshold &&
       matchedEmployee?.staffid !== staffData.user.emp_id
     ) {
       return {
@@ -580,6 +609,8 @@ export const updateFaceService = async ({
   skipDuplicationCheck = false,
 }) => {
   try {
+    const { duplicateThreshold } = getFaceSettings();
+
     console.log('===== FACE UPDATE START =====');
 
     console.log('DB:', db);
@@ -623,7 +654,7 @@ export const updateFaceService = async ({
 
       console.log('Highest similarity:', highestScore);
 
-      if (highestScore >= ENROLLMENT_DUPLICATE_THRESHOLD) {
+      if (highestScore >= duplicateThreshold) {
         console.warn('Duplicate face detected');
         return {
           status: 'duplicate',
@@ -741,11 +772,12 @@ export const updateFaceService = async ({
 };
 
 const findDuplicateFace = async (embedding, vectors, staffId) => {
+  const { batchSize, duplicateThreshold } = getFaceSettings();
   let highestScore = 0;
   let matchedEmployee = null;
 
-  for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
-    const batch = vectors.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < vectors.length; i += batchSize) {
+    const batch = vectors.slice(i, i + batchSize);
 
     if (i > 0) {
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -762,7 +794,7 @@ const findDuplicateFace = async (embedding, vectors, staffId) => {
         matchedEmployee = item;
       }
 
-      if (similarity >= ENROLLMENT_DUPLICATE_THRESHOLD) {
+      if (similarity >= duplicateThreshold) {
         return { highestScore, matchedEmployee };
       }
     }
@@ -782,12 +814,13 @@ export const improveFaceModelService = async ({
   base64Image,
 }) => {
   try {
+    const { updateThreshold } = getFaceSettings();
     const existing = VECTOR_STORE.data.find(v => v.staffid === staffId);
     if (!existing) return;
 
     const similarity = getBestSimilarity(newEmbedding, existing.parsedVector);
 
-    if (similarity < TEMPLATE_UPDATE_THRESHOLD) {
+    if (similarity < updateThreshold) {
       console.log(
         `[FACE LEARNING] Skipped update for ${staffId} (low similarity: ${similarity})`,
       );

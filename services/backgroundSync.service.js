@@ -145,8 +145,6 @@ export const runBackgroundSync = async userToken => {
 
     for (const record of pairedRecords) {
       try {
-        
-
         const formData = new FormData();
 
         formData.append('sync_key', buildSyncKey(record));
