@@ -29,7 +29,7 @@ import {
   Save,
   ArrowLeft,
   Settings2,
-  Camera
+  Camera,
 } from 'lucide-react-native';
 
 import {
@@ -52,7 +52,7 @@ const IconMap = {
   Users,
   RefreshCcw,
   Cpu,
-  Camera
+  Camera,
 };
 
 // Upgraded Premium Theme
@@ -96,9 +96,13 @@ export default function SettingsScreen({ navigation }) {
     setSettingsForm(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleSave = async key => {
+  // Add explicitValue parameter
+  const handleSave = async (key, explicitValue) => {
     setSavingKey(key);
-    await saveSetting(key, settingsForm[key]);
+    // If an explicit value is passed, save that. Otherwise fallback to state.
+    const valueToSave =
+      explicitValue !== undefined ? explicitValue : settingsForm[key];
+    await saveSetting(key, valueToSave);
 
     // Smooth UI feedback duration
     setTimeout(() => {
@@ -148,7 +152,7 @@ export default function SettingsScreen({ navigation }) {
                   activeOpacity={0.7}
                   onPress={() => {
                     handleValueChange(dropdownConfig.config.key, opt.value);
-                    handleSave(dropdownConfig.config.key);
+                    handleSave(dropdownConfig.config.key, opt.value);
                     setDropdownConfig({ visible: false, config: null });
                   }}
                 >
@@ -189,7 +193,7 @@ export default function SettingsScreen({ navigation }) {
             value={Number(value) || config.default}
             onSlidingComplete={val => {
               handleValueChange(config.key, val);
-              handleSave(config.key);
+              handleSave(config.key, val);
             }}
             onValueChange={val => handleValueChange(config.key, val)}
             minimumTrackTintColor={theme.primary}

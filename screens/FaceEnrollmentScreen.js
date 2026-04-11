@@ -31,45 +31,6 @@ import { getSetting } from '../utils/settings.helper';
 
 const { width, height } = Dimensions.get('window');
 
-// ────────────────────────────────────────────────
-//  DYNAMIC ENROLLMENT STEPS
-// ────────────────────────────────────────────────
-const captureCount = getSetting('ENROLLMENT_CAPTURE_COUNT') || 3;
-
-const CAPTURE_STEPS = useMemo(() => {
-  if (captureCount === 5) {
-    return [
-      {
-        id: 1,
-        title: 'Neutral Expression',
-        desc: 'Look straight at the camera.',
-      },
-      { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
-      {
-        id: 3,
-        title: 'Look Left',
-        desc: 'Turn your head slightly to the left.',
-      },
-      {
-        id: 4,
-        title: 'Look Right',
-        desc: 'Turn your head slightly to the right.',
-      },
-      { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
-    ];
-  }
-  // Default to 3 snaps
-  return [
-    {
-      id: 1,
-      title: 'Neutral Expression',
-      desc: 'Look straight at the camera.',
-    },
-    { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
-    { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
-  ];
-}, [captureCount]);
-
 const SwitchIcon = () => (
   <View style={styles.iconContainer}>
     {/* Top Curved Arrow */}
@@ -115,6 +76,45 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
 
   const [isCaptureEnabled, setIsCaptureEnabled] = useState(false);
   const readyTimeoutRef = useRef(null);
+
+  // ────────────────────────────────────────────────
+  //  DYNAMIC ENROLLMENT STEPS
+  // ────────────────────────────────────────────────
+  const captureCount = getSetting('ENROLLMENT_CAPTURE_COUNT') || 3;
+
+  const CAPTURE_STEPS = useMemo(() => {
+    if (captureCount === 5) {
+      return [
+        {
+          id: 1,
+          title: 'Neutral Expression',
+          desc: 'Look straight at the camera.',
+        },
+        { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
+        {
+          id: 3,
+          title: 'Look Left',
+          desc: 'Turn your head slightly to the left.',
+        },
+        {
+          id: 4,
+          title: 'Look Right',
+          desc: 'Turn your head slightly to the right.',
+        },
+        { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
+      ];
+    }
+    // Default to 3 snaps
+    return [
+      {
+        id: 1,
+        title: 'Neutral Expression',
+        desc: 'Look straight at the camera.',
+      },
+      { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
+      { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
+    ];
+  }, [captureCount]);
 
   // --- Business Logic (Unchanged) ---
   useEffect(() => {
