@@ -52,6 +52,14 @@ import MultipleMatchPopup from '../components/AttendanceComps/MultipleMatchPopup
 
 import { useAuth } from '../AuthContext';
 
+import {
+  getDeviceSnapshot,
+  createLogSession,
+  appendToLogSession,
+  finalizeLogSession,
+  startLoggerEngine,
+} from '../services/logger.service';
+
 const { width, height } = Dimensions.get('window');
 
 function CheckOutScreen({
@@ -115,6 +123,19 @@ function CheckOutScreen({
     return nearyByProject[0]?.projectname || 'No Projects';
   };
 
+  // Fire-and-forget logger — never blocks the UI
+  const logEvent = (actionType, payload = {}) => {
+    getDeviceSnapshot()
+      .then(snapshot => {
+        const session = createLogSession(actionType, snapshot);
+        Object.entries(payload).forEach(([key, value]) => {
+          appendToLogSession(session, key, value);
+        });
+        finalizeLogSession(session);
+      })
+      .catch(() => {});
+  };
+
   // HELPER: PROCESS PHOTO TO BASE64
   // HELPER: PROCESS AND RESIZE PHOTO TO BASE64
   const processPhotoToBase64 = async photoObj => {
@@ -164,6 +185,7 @@ function CheckOutScreen({
         await createTables(database);
         await loadVectorsService(database);
         setDb(database);
+        startLoggerEngine(user?.token || null);
 
         const projectJson = await AsyncStorage.getItem('Project');
         setCurrentProject(projectJson ? JSON.parse(projectJson) : null);
@@ -250,6 +272,12 @@ function CheckOutScreen({
     isProcessing.current = true;
     setIsWorking(true);
 
+    logEvent('check_out_face_attempt', {
+      mode: 'auto',
+      camera: cameraPosition,
+      project: currentProject?.projectname || null,
+    });
+
     try {
       const faceResult = await recognizeFaceService({
         cameraRef,
@@ -257,17 +285,29 @@ function CheckOutScreen({
       });
 
       if (faceResult.status === 'no_match') {
+        logEvent('check_out_face_no_match', {
+          message: faceResult.message,
+          camera: cameraPosition,
+        });
         setErrorMsg(faceResult.message);
         setTimeout(() => setErrorMsg(null), 5000);
         return;
       }
 
       if (faceResult.status === 'multiple') {
+        logEvent('check_out_face_multiple_match', {
+          match_count: faceResult.matches.length,
+          camera: cameraPosition,
+        });
         setMatchedPersons(faceResult.matches);
         return;
       }
 
       if (faceResult.status === 'single') {
+        logEvent('check_out_face_single_match', {
+          employee: { staffid: faceResult.employee?.staffid, name: faceResult.employee?.name },
+          camera: cameraPosition,
+        });
         try {
           const snap = await cameraRef.current.takePhoto({
             qualityPrioritization: 'speed',
@@ -284,11 +324,13 @@ function CheckOutScreen({
       }
 
       if (faceResult.status === 'error') {
+        logEvent('check_out_face_error', { message: faceResult.message });
         setErrorMsg(faceResult.message);
         setTimeout(() => setErrorMsg(null), 5000);
         return;
       }
     } catch (err) {
+      logEvent('check_out_face_error', { message: err.message || 'Recognition failed' });
       setErrorMsg(err.message || 'Recognition failed');
       setTimeout(() => setErrorMsg(null), 5000);
     } finally {
@@ -320,6 +362,11 @@ function CheckOutScreen({
       return;
     }
 
+    logEvent('check_out_manual_attempt', {
+      emp_id: manualEmpId.trim(),
+      project: currentProject?.projectname || null,
+    });
+
     setIsWorking(true);
     try {
       const serviceResult = await manualEntryService({
@@ -335,6 +382,7 @@ function CheckOutScreen({
       });
 
       if (serviceResult.status === 'not_found') {
+        logEvent('check_out_manual_not_found', { emp_id: manualEmpId.trim() });
         Alert.alert('Not Found', serviceResult.message);
         return;
       }
@@ -350,6 +398,10 @@ function CheckOutScreen({
       setIsManualMode(false);
 
       if (serviceResult.status === 'success') {
+        logEvent('check_out_manual_success', {
+          employee: { staffid: serviceResult.employee?.staffid, name: serviceResult.employee?.name },
+          project: currentProject?.projectname || null,
+        });
         setEmpID(serviceResult.employee);
         try {
           SoundPlayer.playAsset(successSound);
@@ -362,6 +414,11 @@ function CheckOutScreen({
         serviceResult.status === 'already_checkedout' ||
         serviceResult.status === 'no_active_checkin'
       ) {
+        logEvent('check_out_manual_blocked', {
+          reason: serviceResult.status,
+          employee: { staffid: serviceResult.employee?.staffid, name: serviceResult.employee?.name },
+          message: serviceResult.message,
+        });
         try {
           SoundPlayer.playAsset(warningSound);
         } catch {}
@@ -380,6 +437,7 @@ function CheckOutScreen({
       setErrorMsg(serviceResult.message || 'Manual Check-out failed');
       setTimeout(() => setErrorMsg(null), 5000);
     } catch (err) {
+      logEvent('check_out_error', { message: err.message || 'Manual check-out error' });
       console.error('Manual UI Error:', err);
       setErrorMsg('An unexpected error occurred.');
       setTimeout(() => setErrorMsg(null), 5000);
@@ -572,6 +630,11 @@ function CheckOutScreen({
         employee={pendingPerson}
         checkType="out"
         onConfirm={() => {
+          logEvent('check_out_confirmed', {
+            employee: { staffid: pendingPerson?.staffid, name: pendingPerson?.name },
+            project: currentProject?.projectname || null,
+            mode: 'auto',
+          });
           // 1. Close modal and show loading spinner immediately
           setShowConfirmation(false);
           setIsWorking(true);
@@ -602,6 +665,11 @@ function CheckOutScreen({
               });
 
               if (serviceResult.status === 'success') {
+                logEvent('check_out_success', {
+                  employee: { staffid: pendingPerson?.staffid, name: pendingPerson?.name },
+                  project: currentProject?.projectname || null,
+                  mode: 'auto',
+                });
                 // setEmpID(serviceResult.employee);
                 // try {
                 //   SoundPlayer.playAsset(successSound);
@@ -617,6 +685,11 @@ function CheckOutScreen({
                 serviceResult.status === 'already_checkedout' ||
                 serviceResult.status === 'no_active_checkin'
               ) {
+                logEvent('check_out_blocked', {
+                  reason: serviceResult.status,
+                  employee: { staffid: pendingPerson?.staffid, name: pendingPerson?.name },
+                  message: serviceResult.message,
+                });
                 try {
                   SoundPlayer.playAsset(warningSound);
                 } catch {}
@@ -637,6 +710,7 @@ function CheckOutScreen({
               setErrorMsg(serviceResult.message);
               setTimeout(() => setErrorMsg(null), 5000);
             } catch (err) {
+              logEvent('check_out_error', { message: err.message || 'Check-out error' });
               console.error('Check-out Error:', err);
               setErrorMsg('An error occurred during check-out.');
               setTimeout(() => setErrorMsg(null), 5000);

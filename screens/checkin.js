@@ -59,6 +59,14 @@ import MultipleMatchPopup from '../components/AttendanceComps/MultipleMatchPopup
 import { useAuth } from '../AuthContext';
 import { getFaceEmbeddingFromImage } from '../utils/FaceRecognitionUtil';
 
+import {
+  getDeviceSnapshot,
+  createLogSession,
+  appendToLogSession,
+  finalizeLogSession,
+  startLoggerEngine,
+} from '../services/logger.service';
+
 const { width, height } = Dimensions.get('window');
 
 function CheckInScreen({
@@ -127,6 +135,19 @@ function CheckInScreen({
     return nearyByProject[0]?.projectname || 'No Projects';
   };
 
+  // Fire-and-forget logger — never blocks the UI
+  const logEvent = (actionType, payload = {}) => {
+    getDeviceSnapshot()
+      .then(snapshot => {
+        const session = createLogSession(actionType, snapshot);
+        Object.entries(payload).forEach(([key, value]) => {
+          appendToLogSession(session, key, value);
+        });
+        finalizeLogSession(session);
+      })
+      .catch(() => {});
+  };
+
   // HELPER: PROCESS PHOTO TO BASE64
   // HELPER: PROCESS AND RESIZE PHOTO TO BASE64
   const processPhotoToBase64 = async photoObj => {
@@ -177,6 +198,7 @@ function CheckInScreen({
         await loadVectorsService(database);
         setInitialized(true);
         setDb(database);
+        startLoggerEngine(user?.token || null);
 
         const projectJson = await AsyncStorage.getItem('Project');
         setCurrentProject(projectJson ? JSON.parse(projectJson) : null);
@@ -264,6 +286,12 @@ function CheckInScreen({
     isProcessing.current = true;
     setIsWorking(true);
 
+    logEvent('check_in_face_attempt', {
+      mode: 'auto',
+      camera: cameraPosition,
+      project: currentProject?.projectname || null,
+    });
+
     try {
       const faceResult = await recognizeFaceService({
         cameraRef,
@@ -271,12 +299,20 @@ function CheckInScreen({
       });
 
       if (faceResult.status === 'no_match') {
+        logEvent('check_in_face_no_match', {
+          message: faceResult.message,
+          camera: cameraPosition,
+        });
         setErrorMsg(faceResult.message);
         setTimeout(() => setErrorMsg(null), 5000);
         return;
       }
 
       if (faceResult.status === 'multiple') {
+        logEvent('check_in_face_multiple_match', {
+          match_count: faceResult.matches.length,
+          camera: cameraPosition,
+        });
         setMatchedPersons(
           faceResult.matches.map(m => ({
             ...m,
@@ -287,6 +323,10 @@ function CheckInScreen({
       }
 
       if (faceResult.status === 'single') {
+        logEvent('check_in_face_single_match', {
+          employee: { staffid: faceResult.employee?.staffid, name: faceResult.employee?.name },
+          camera: cameraPosition,
+        });
         try {
           const snap = await cameraRef.current.takePhoto({
             qualityPrioritization: 'speed',
@@ -307,11 +347,13 @@ function CheckInScreen({
       }
 
       if (faceResult.status === 'error') {
+        logEvent('check_in_face_error', { message: faceResult.message });
         setErrorMsg(faceResult.message);
         setTimeout(() => setErrorMsg(null), 5000);
         return;
       }
     } catch (err) {
+      logEvent('check_in_face_error', { message: err.message || 'Recognition failed' });
       setErrorMsg(err.message || 'Recognition failed');
       setTimeout(() => setErrorMsg(null), 5000);
     } finally {
@@ -343,6 +385,11 @@ function CheckInScreen({
       return;
     }
 
+    logEvent('check_in_manual_attempt', {
+      emp_id: manualEmpId.trim(),
+      project: currentProject?.projectname || null,
+    });
+
     setIsWorking(true);
     try {
       const serviceResult = await manualEntryService({
@@ -358,6 +405,7 @@ function CheckInScreen({
       });
 
       if (serviceResult.status === 'not_found') {
+        logEvent('check_in_manual_not_found', { emp_id: manualEmpId.trim() });
         Alert.alert('Not Found', serviceResult.message);
         return;
       }
@@ -373,6 +421,10 @@ function CheckInScreen({
       setIsManualMode(false);
 
       if (serviceResult.status === 'success') {
+        logEvent('check_in_manual_success', {
+          employee: { staffid: serviceResult.employee?.staffid, name: serviceResult.employee?.name },
+          project: currentProject?.projectname || null,
+        });
         setEmpID(serviceResult.employee);
         try {
           SoundPlayer.playAsset(successSound);
@@ -399,6 +451,10 @@ function CheckInScreen({
       }
 
       if (serviceResult.status === 'already_checkedin') {
+        logEvent('check_in_manual_already_checkedin', {
+          employee: { staffid: serviceResult.employee?.staffid, name: serviceResult.employee?.name },
+          message: serviceResult.message,
+        });
         try {
           SoundPlayer.playAsset(warningSound);
         } catch {}
@@ -415,6 +471,9 @@ function CheckInScreen({
       }
 
       if (serviceResult.status === 'active_checkin') {
+        logEvent('check_in_manual_active_checkin', {
+          employee: { staffid: serviceResult.employee?.staffid, name: serviceResult.employee?.name },
+        });
         try {
           SoundPlayer.playAsset(warningSound);
         } catch {}
@@ -427,6 +486,7 @@ function CheckInScreen({
       setErrorMsg(serviceResult.message || 'Manual Check-in failed');
       setTimeout(() => setErrorMsg(null), 5000);
     } catch (err) {
+      logEvent('check_in_error', { message: err.message || 'Manual check-in error' });
       console.error('Manual UI Error:', err);
       setErrorMsg('An unexpected error occurred.');
       setTimeout(() => setErrorMsg(null), 5000);
@@ -610,6 +670,11 @@ function CheckInScreen({
         activeCheckin={activeDetails?.activeCheckin}
         newProject={activeDetails?.newProject}
         onConfirm={async () => {
+          logEvent('check_in_project_switch', {
+            employee: { staffid: pendingPerson?.staffid, name: pendingPerson?.name },
+            from_project: activeDetails?.activeCheckin?.projectname || null,
+            to_project: activeDetails?.newProject?.projectname || null,
+          });
           try {
             const photoToProcess = isManualMode ? manualPhoto : autoPhoto;
             const base64Image = await processPhotoToBase64(photoToProcess);
@@ -656,6 +721,11 @@ function CheckInScreen({
         visible={showConfirmation}
         employee={pendingPerson}
         onConfirm={() => {
+          logEvent('check_in_confirmed', {
+            employee: { staffid: pendingPerson?.staffid, name: pendingPerson?.name },
+            project: currentProject?.projectname || null,
+            mode: 'auto',
+          });
           setEmpID(pendingPerson);
           setIsWorking(true);
 
@@ -684,6 +754,11 @@ function CheckInScreen({
               });
 
               if (serviceResult.status === 'success') {
+                logEvent('check_in_success', {
+                  employee: { staffid: pendingPerson?.staffid, name: pendingPerson?.name },
+                  project: currentProject?.projectname || null,
+                  mode: 'auto',
+                });
                 // setEmpID(serviceResult.employee);
                 // try {
                 //   SoundPlayer.playAsset(successSound);
@@ -707,6 +782,10 @@ function CheckInScreen({
               }
 
               if (serviceResult.status === 'already_checkedin') {
+                logEvent('check_in_already_checkedin', {
+                  employee: { staffid: pendingPerson?.staffid, name: pendingPerson?.name },
+                  message: serviceResult.message,
+                });
                 try {
                   SoundPlayer.playAsset(warningSound);
                 } catch {}
@@ -722,6 +801,9 @@ function CheckInScreen({
               }
 
               if (serviceResult.status === 'active_checkin') {
+                logEvent('check_in_active_checkin_detected', {
+                  employee: { staffid: serviceResult.employee?.staffid, name: serviceResult.employee?.name },
+                });
                 try {
                   SoundPlayer.playAsset(warningSound);
                 } catch {}
@@ -734,6 +816,7 @@ function CheckInScreen({
               setErrorMsg(serviceResult.message);
               setTimeout(() => setErrorMsg(null), 3000);
             } catch (err) {
+              logEvent('check_in_error', { message: err.message || 'Check-in error' });
               console.error('Checkin Error:', err);
               setErrorMsg('An error occurred during check-in.');
               setTimeout(() => setErrorMsg(null), 3000);

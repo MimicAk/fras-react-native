@@ -118,7 +118,7 @@ export const appendToLogSession = (session, sectionKey, data) => {
  * Moves an active session into the background queue to be saved.
  * @param {Object} session - The active session to close and queue
  */
-export const finalizeLogSession = (session) => {
+export const finalizeLogSession = session => {
   if (!session) return;
   logQueue.push(session);
 };
@@ -145,16 +145,16 @@ const flushLogsToDB = async () => {
     await createLoggerTable(db);
 
     // SQLite requires JSON objects to be stringified
-    const dbReadyBatch = batch.map((log) => ({
+    const dbReadyBatch = batch.map(log => ({
       ...log,
-      log_payload: typeof log.log_payload === 'object' 
-        ? JSON.stringify(log.log_payload) 
-        : log.log_payload,
+      log_payload:
+        typeof log.log_payload === 'object'
+          ? JSON.stringify(log.log_payload)
+          : log.log_payload,
     }));
 
     await insertLogsBatch(db, dbReadyBatch);
     await rotateLogs(db); // Clean up old logs
-
   } catch (err) {
     console.error('[Logger] DB Flush Error:', err);
     // CRITICAL FIX: Put the failed batch BACK into the front of the queue
@@ -172,7 +172,7 @@ const flushLogsToDB = async () => {
  * Pulls unsynced logs from SQLite and pushes them to the backend API.
  * @param {string} userToken - The authorization token
  */
-const syncLogsToServer = async (userToken) => {
+const syncLogsToServer = async userToken => {
   if (isSyncing || !userToken) return;
 
   const net = await NetInfo.fetch();
@@ -192,12 +192,13 @@ const syncLogsToServer = async (userToken) => {
     }
 
     // Safely parse the SQLite strings back into JSON objects for the server
-    const payload = unsyncedLogs.map((log) => {
+    const payload = unsyncedLogs.map(log => {
       let parsedPayload = {};
       try {
-        parsedPayload = typeof log.log_payload === 'string'
-          ? JSON.parse(log.log_payload)
-          : log.log_payload;
+        parsedPayload =
+          typeof log.log_payload === 'string'
+            ? JSON.parse(log.log_payload)
+            : log.log_payload;
       } catch (e) {
         parsedPayload = { error: 'Failed to parse stored payload' };
       }
@@ -222,9 +223,8 @@ const syncLogsToServer = async (userToken) => {
     if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
     // If successful, mark them synced so they aren't sent again
-    const ids = unsyncedLogs.map((l) => l.id);
+    const ids = unsyncedLogs.map(l => l.id);
     await markLogsSynced(db, ids);
-
   } catch (err) {
     console.warn('[Logger] Server Sync Error:', err.message);
   } finally {
@@ -241,7 +241,7 @@ const syncLogsToServer = async (userToken) => {
  * Safe to call multiple times (e.g., on AppState changes) without creating memory leaks.
  * @param {string} userToken - The authorization token
  */
-export const startLoggerEngine = (userToken) => {
+export const startLoggerEngine = userToken => {
   if (!flushInterval) {
     flushInterval = setInterval(flushLogsToDB, 15000);
   }
@@ -254,7 +254,7 @@ export const startLoggerEngine = (userToken) => {
 
   // Prevent attaching duplicate event listeners
   if (!netInfoUnsubscribe) {
-    netInfoUnsubscribe = NetInfo.addEventListener((state) => {
+    netInfoUnsubscribe = NetInfo.addEventListener(state => {
       if (state.isConnected) {
         syncLogsToServer(userToken);
       }
@@ -286,9 +286,10 @@ export const attachQueryInfo = (session, queryString) => {
     session.log_payload.device.runtime = {};
   }
 
-  const cleanQuery = queryString?.length > 300
-    ? queryString.substring(0, 300) + '...'
-    : queryString;
+  const cleanQuery =
+    queryString?.length > 300
+      ? queryString.substring(0, 300) + '...'
+      : queryString;
 
   session.log_payload.device.runtime.current_query = cleanQuery;
 };
