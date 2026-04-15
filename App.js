@@ -18,6 +18,8 @@ import DashboardScreen from './screens/dashboard';
 
 import { initializeSettings } from './utils/settings.helper';
 
+import Orientation from 'react-native-orientation-locker';
+
 const Stack = createStackNavigator();
 
 function AppContent() {
@@ -53,7 +55,13 @@ export default function StackNavigator() {
       }
     };
 
+    Orientation.lockToPortrait();
+
     setupSettings();
+
+    return () => {
+      Orientation.unlockAllOrientations();
+    };
   }, []);
   return (
     <SafeAreaProvider>

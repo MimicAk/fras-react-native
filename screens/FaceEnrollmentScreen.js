@@ -28,6 +28,7 @@ import {
 import RNFS from 'react-native-fs';
 
 import { getSetting } from '../utils/settings.helper';
+import { resetFaceStabilizer } from '../services/faceProcessing.service';
 
 const { width, height } = Dimensions.get('window');
 
@@ -54,6 +55,7 @@ import {
   normalizeVector,
 } from '../services/face.service';
 import { connectToDatabase } from '../database/connection';
+import Logger from '../services/bugfender.service';
 
 export default function FaceEnrollmentScreen({ navigation, route }) {
   const { staffData, onEnrollmentSuccess } = route?.params || {};
@@ -75,7 +77,6 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
   const [isFinalizing, setIsFinalizing] = useState(false);
 
   const [isCaptureEnabled, setIsCaptureEnabled] = useState(false);
-  const readyTimeoutRef = useRef(null);
 
   // ────────────────────────────────────────────────
   //  DYNAMIC ENROLLMENT STEPS
@@ -132,20 +133,20 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
   }, [hasPermission, requestPermission]);
 
   useEffect(() => {
+    // Log entry into the screen
+    Logger.info(
+      `FaceEnrollmentScreen mounted for staff: ${staffData?.guid || 'UNKNOWN'}`,
+    );
+
     if (!staffData?.guid) {
+      Logger.warn(
+        'Enrollment aborted: Missing employee information (staffData.guid is null)',
+      );
       Alert.alert('Error', 'Missing employee information', [
         { text: 'Go Back', onPress: () => navigation.goBack() },
       ]);
     }
   }, [staffData, navigation]);
-
-  useEffect(() => {
-    return () => {
-      if (readyTimeoutRef.current) {
-        clearTimeout(readyTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const updateQualityFeedback = useCallback(async () => {
     if (
@@ -160,7 +161,7 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
     let snapshotPath = null;
     try {
       const snap = await cameraRef.current.takeSnapshot({
-        quality: 30,
+        quality: 80,
         skipMetadata: true,
       });
       snapshotPath = `file://${snap.path}`;
@@ -168,36 +169,14 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         snapshotPath,
         cameraPosition,
       );
-      const isReady = result?.isReady;
 
-      setStatusText(
-        isReady
-          ? 'Ready! Press Capture'
-          : result?.message || 'Adjust position...',
-      );
+      console.log(result);
 
-      // 🔥 Smooth UX logic
-      if (isReady) {
-        // delay enabling (avoid flicker)
-        if (!readyTimeoutRef.current) {
-          readyTimeoutRef.current = setTimeout(() => {
-            setIsCaptureEnabled(true);
-          }, 800); // 0.8s stability
-        }
-      } else {
-        // DO NOT disable immediately
-        if (readyTimeoutRef.current) {
-          clearTimeout(readyTimeoutRef.current);
-          readyTimeoutRef.current = null;
-        }
-
-        // delay disabling (grace period)
-        setTimeout(() => {
-          setIsCaptureEnabled(false);
-        }, 1200); // 1.2s grace
-      }
+      setStatusText(result.message);
+      setIsCaptureEnabled(result.canCapture);
     } catch (err) {
       console.log('Quality check failed:', err);
+      Logger.trace(`Quality check failed: ${err?.message}`);
     } finally {
       if (snapshotPath) RNFS.unlink(snapshotPath).catch(() => {});
     }
@@ -205,12 +184,19 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
 
   useEffect(() => {
     if (hasPermission !== true || !device || !cameraReady) return;
-    const interval = setInterval(updateQualityFeedback, 2200);
+    const interval = setInterval(updateQualityFeedback, 800);
     return () => clearInterval(interval);
   }, [hasPermission, device, cameraReady, updateQualityFeedback]);
 
   const handleCapture = useCallback(async () => {
     if (!cameraRef.current || isProcessing.current || !cameraReady) return;
+
+    Logger.info(
+      `Initiating capture for step ${currentStep + 1} (${
+        CAPTURE_STEPS[currentStep]?.title
+      })`,
+    );
+
     isProcessing.current = true;
     setIsCapturing(true);
     setStatusText('Analyzing...');
@@ -220,6 +206,7 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
       const photo = await cameraRef.current.takePhoto({
         flash: 'off',
         qualityPrioritization: 'balanced',
+        skipMetadata: true,
       });
       photoPath = `file://${photo.path}`;
       const embedding = await getFaceEmbeddingFromImage(
@@ -227,6 +214,11 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         cameraPosition,
         true,
       );
+
+      if (!embedding) {
+        Logger.warn(`Failed to extract embedding on step ${currentStep + 1}`);
+      }
+
       let newEmbeddings = [...embeddings, embedding];
 
       if (currentStep === 0) {
@@ -244,10 +236,16 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         await finalizeEnrollment(newEmbeddings);
       }
     } catch (error) {
+      Logger.error(
+        `Capture failed at step ${currentStep + 1}: ${error?.message}`,
+      );
       Alert.alert('Capture Failed', error?.message || 'Try again.');
     } finally {
       setIsCapturing(false);
       isProcessing.current = false;
+
+      resetFaceStabilizer();
+
       if (photoPath) RNFS.unlink(photoPath).catch(() => {});
     }
   }, [
@@ -267,6 +265,10 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
       const validEmbeddings = finalEmbeddings.filter(
         e =>
           (Array.isArray(e) || e instanceof Float32Array) && e.length === 512,
+      );
+
+      Logger.info(
+        `Finalizing enrollment. forceSave: ${forceSave}, validEmbeddings: ${validEmbeddings.length}`,
       );
 
       if (validEmbeddings.length === 0) {
@@ -292,6 +294,8 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
 
       console.log('Enrollment result:', result);
 
+      Logger.info(`updateFaceService response status: ${result?.status}`);
+
       // SUCCESS
       if (result?.status === 'success') {
         onEnrollmentSuccess?.();
@@ -303,6 +307,8 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
       if (result?.status === 'duplicate' && !forceSave) {
         setIsFinalizing(false); // Hide loader before showing alert
         setStatusText('Duplicate Found');
+
+        Logger.warn(`Duplicate face detected for staff: ${staffData.guid}`);
 
         Alert.alert(
           'Duplicate Face Detected',
@@ -404,6 +410,8 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         device={device}
         isActive={isFocused && cameraReady && !isFinalizing}
         photo={true}
+        orientation="portrait"
+        outputOrientation="portrait"
         onInitialized={() => setCameraReady(true)}
       />
 

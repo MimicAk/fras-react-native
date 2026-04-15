@@ -6,6 +6,8 @@ import ImageEditor from '@react-native-community/image-editor';
 import ImageResizer from 'react-native-image-resizer';
 import { Image, Platform, NativeModules } from 'react-native';
 
+import { evaluateFaceQuality } from '../services/faceProcessing.service';
+
 const { TFLiteFaceModule } = NativeModules;
 
 // ────────────────────────────────────────────────
@@ -400,21 +402,12 @@ export const checkFaceQualityRealTime = async (
     );
 
     const faces = await FaceDetection.detect(normalizedPath, {
-      performanceMode: 'fast',
+      performanceMode: 'accurate',
       landmarkMode: 'all',
       classificationMode: 'all',
       minFaceSize: 0.1,
     });
 
-    if (faces.length === 0) {
-      return { isReady: false, message: 'No face detected' };
-    }
-
-    if (faces.length > 1) {
-      return { isReady: false, message: 'Multiple faces detected' };
-    }
-
-    const face = faces[0];
     const imageSize = await new Promise((resolve, reject) =>
       Image.getSize(
         normalizedPath,
@@ -423,42 +416,17 @@ export const checkFaceQualityRealTime = async (
       ),
     );
 
-    const faceArea = face.frame.width * face.frame.height;
-    const imageArea = imageSize.width * imageSize.height;
-    const percentage = (faceArea / imageArea) * 100;
+    // 🔥 USE FUNCTION
+    const result = evaluateFaceQuality(faces, imageSize, cameraType);
 
-    if (percentage < 30) {
-      return { isReady: false, message: 'Come closer to the camera' };
-    }
-
-    if (
-      Math.abs(face.yawAngle) > 20 ||
-      Math.abs(face.pitchAngle) > 20 ||
-      Math.abs(face.rollAngle) > 20
-    ) {
-      // if (
-      //   Math.abs(face.rotationX) > 20 ||
-      //   Math.abs(face.rotationY) > 20 ||
-      //   Math.abs(face.rotationZ) > 20
-      // )
-
-      return { isReady: false, message: 'Keep your head straight' };
-    }
-
-    if (
-      face.leftEyeOpenProbability < 0.7 ||
-      face.rightEyeOpenProbability < 0.7
-    ) {
-      return { isReady: false, message: 'Open your eyes fully' };
-    }
-
-    if (normalizedPath !== imagePath.replace('file://', '')) {
-      RNFS.unlink(normalizedPath).catch(() => {});
-    }
-
-    return { isReady: true, message: 'Ready to capture' };
+    return {
+      isReady: result.isReady,
+      canCapture: result.canCapture,
+      message: result.message,
+      score: result.score,
+    };
   } catch (err) {
-    return { isReady: false, message: 'Checking face quality...' };
+    return { isReady: false, canCapture: false, message: 'Checking face...' };
   }
 };
 

@@ -38,7 +38,7 @@ import SmallAlert from '../components/AttendanceComps/SmallAlert';
 import {
   loadVectorsService,
   recognizeFaceService,
-  setCurrentUser
+  setCurrentUser,
 } from '../services/face.service';
 import {
   processCheckOutService,
@@ -271,6 +271,7 @@ function CheckOutScreen({
         try {
           const snap = await cameraRef.current.takePhoto({
             qualityPrioritization: 'speed',
+            skipMetadata: true,
           });
           setAutoPhoto(snap);
         } catch (err) {
@@ -302,6 +303,7 @@ function CheckOutScreen({
     try {
       const photo = await cameraRef.current.takePhoto({
         qualityPrioritization: 'speed',
+        skipMetadata: true,
       });
       setManualPhoto(photo);
       setShowManualModal(true);
@@ -449,6 +451,8 @@ function CheckOutScreen({
           device={device}
           isActive={isFocused && cameraReady}
           photo={true}
+          orientation="portrait"
+          outputOrientation="portrait"
           onInitialized={() => setCameraReady(true)}
         />
         {!isManualMode && <FacePositionOverlay />}
@@ -604,6 +608,9 @@ function CheckOutScreen({
                 // } catch {}
                 // setTimeout(() => setEmpID(null), 5000);
                 // return;
+
+                setTimeout(() => setEmpID(null), 3000);
+                return;
               }
 
               if (

@@ -44,7 +44,7 @@ import {
   recognizeFaceService,
   improveFaceModelService,
   normalizeVector,
-  setCurrentUser
+  setCurrentUser,
 } from '../services/face.service';
 
 import {
@@ -180,7 +180,6 @@ function CheckInScreen({
 
         const projectJson = await AsyncStorage.getItem('Project');
         setCurrentProject(projectJson ? JSON.parse(projectJson) : null);
-
       } catch (err) {
         console.error('Init failed:', err);
         setErrorMsg('Failed to initialize. Please restart the app.');
@@ -291,6 +290,7 @@ function CheckInScreen({
         try {
           const snap = await cameraRef.current.takePhoto({
             qualityPrioritization: 'speed',
+            skipMetadata: true,
           });
           setAutoPhoto(snap);
         } catch (err) {
@@ -326,6 +326,7 @@ function CheckInScreen({
     try {
       const photo = await cameraRef.current.takePhoto({
         qualityPrioritization: 'speed',
+        skipMetadata: true,
       });
       setManualPhoto(photo);
       setShowManualModal(true);
@@ -497,6 +498,8 @@ function CheckInScreen({
           device={device}
           isActive={isFocused && cameraReady}
           photo={true}
+          orientation="portrait"
+          outputOrientation="portrait"
           onInitialized={() => setCameraReady(true)}
         />
         {!isManualMode && <FacePositionOverlay />}
