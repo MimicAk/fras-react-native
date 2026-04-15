@@ -17,6 +17,7 @@ import SettingsScreen from './screens/SettingsScreen';
 import DashboardScreen from './screens/dashboard';
 
 import { initializeSettings } from './utils/settings.helper';
+import Logger from './services/bugfender.service';
 
 import Orientation from 'react-native-orientation-locker';
 
@@ -55,6 +56,7 @@ export default function StackNavigator() {
       }
     };
 
+    Logger.init();
     Orientation.lockToPortrait();
 
     setupSettings();

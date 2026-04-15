@@ -1,6 +1,7 @@
 import NetInfo from '@react-native-community/netinfo';
 import { v4 as uuidv4 } from 'uuid';
 import DeviceInfo from 'react-native-device-info';
+import { LogLevel } from '@bugfender/rn-bugfender';
 
 import { connectToDatabase } from '../database/connection';
 import { createLoggerTable } from '../database/schema';
@@ -11,6 +12,7 @@ import {
   rotateLogs,
 } from '../database/logger.repository';
 import { config } from '../config/config';
+import Logger from './bugfender.service';
 
 /* ======================================================
    INTERNAL STATE
@@ -115,12 +117,45 @@ export const appendToLogSession = (session, sectionKey, data) => {
 };
 
 /**
- * Moves an active session into the background queue to be saved.
+ * Maps an action_type string to a Bugfender LogLevel.
+ * @param {string} actionType
+ * @returns {LogLevel}
+ */
+const resolveBugfenderLevel = actionType => {
+  if (actionType.includes('error')) return LogLevel.Error;
+  if (
+    actionType.includes('no_match') ||
+    actionType.includes('already_') ||
+    actionType.includes('blocked') ||
+    actionType.includes('not_found')
+  )
+    return LogLevel.Warning;
+  if (actionType.includes('attempt')) return LogLevel.Debug;
+  return LogLevel.Info;
+};
+
+/**
+ * Moves an active session into the background queue to be saved,
+ * and mirrors the event to the Bugfender dashboard.
  * @param {Object} session - The active session to close and queue
  */
 export const finalizeLogSession = session => {
   if (!session) return;
   logQueue.push(session);
+
+  // Mirror to Bugfender — strip the verbose device snapshot since
+  // Bugfender already captures device context via its own SDK.
+  try {
+    const { device, ...eventData } = session.log_payload || {};
+    Logger.sendLog({
+      tag: session.action_type,
+      text: JSON.stringify(eventData),
+      level: resolveBugfenderLevel(session.action_type),
+      line: 0,
+      method: 'logEvent',
+      file: 'attendance',
+    });
+  } catch (_) {}
 };
 
 /* ======================================================
