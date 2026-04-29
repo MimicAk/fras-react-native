@@ -37,9 +37,11 @@ import SmallAlert from '../components/AttendanceComps/SmallAlert';
 
 import {
   loadVectorsService,
-  recognizeFaceService,
+  // recognizeFaceService,  // disabled: CompreFace is primary
   setCurrentUser,
 } from '../services/face.service';
+
+import { cfRecognizeFace } from '../services/compreFace.service';
 import {
   processCheckOutService,
   manualEntryService,
@@ -279,10 +281,7 @@ function CheckOutScreen({
     });
 
     try {
-      const faceResult = await recognizeFaceService({
-        cameraRef,
-        switchCamera: cameraPosition === 'front',
-      });
+      const faceResult = await cfRecognizeFace({ cameraRef });
 
       if (faceResult.status === 'no_match') {
         logEvent('check_out_face_no_match', {

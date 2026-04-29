@@ -46,16 +46,15 @@ const SwitchIcon = () => (
 
 import FacePositionOverlay from '../components/FacePositionOverlay';
 import {
-  getFaceEmbeddingFromImage,
+  // getFaceEmbeddingFromImage, // disabled: local embeddings off
   checkFaceQualityRealTime,
 } from '../utils/FaceRecognitionUtil';
-import {
-  enrollFaceService,
-  updateFaceService,
-  normalizeVector,
-} from '../services/face.service';
+
+import { updateFaceService } from '../services/face.service';
 import { connectToDatabase } from '../database/connection';
+
 import Logger from '../services/bugfender.service';
+import { cfEnrollFace, cfRefreshStaffCache } from '../services/compreFace.service';
 
 export default function FaceEnrollmentScreen({ navigation, route }) {
   const { staffData, onEnrollmentSuccess } = route?.params || {};
@@ -70,13 +69,15 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
 
   const [cameraReady, setCameraReady] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
-  const [embeddings, setEmbeddings] = useState([]);
-  const [referenceBase64, setReferenceBase64] = useState(null);
+  const [capturedBase64s, setCapturedBase64s] = useState([]);
   const [statusText, setStatusText] = useState('Position face in oval');
   const [isCapturing, setIsCapturing] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
-
   const [isCaptureEnabled, setIsCaptureEnabled] = useState(false);
+
+  // LOCAL EMBEDDING STATE — disabled
+  // const [embeddings, setEmbeddings] = useState([]);
+  // const [referenceBase64, setReferenceBase64] = useState(null);
 
   // ────────────────────────────────────────────────
   //  DYNAMIC ENROLLMENT STEPS
@@ -86,62 +87,37 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
   const CAPTURE_STEPS = useMemo(() => {
     if (captureCount === 5) {
       return [
-        {
-          id: 1,
-          title: 'Neutral Expression',
-          desc: 'Look straight at the camera.',
-        },
+        { id: 1, title: 'Neutral Expression', desc: 'Look straight at the camera.' },
         { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
-        {
-          id: 3,
-          title: 'Look Left',
-          desc: 'Turn your head slightly to the left.',
-        },
-        {
-          id: 4,
-          title: 'Look Right',
-          desc: 'Turn your head slightly to the right.',
-        },
+        { id: 3, title: 'Look Left', desc: 'Turn your head slightly to the left.' },
+        { id: 4, title: 'Look Right', desc: 'Turn your head slightly to the right.' },
         { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
       ];
     }
     // Default to 3 snaps
     return [
-      {
-        id: 1,
-        title: 'Neutral Expression',
-        desc: 'Look straight at the camera.',
-      },
+      { id: 1, title: 'Neutral Expression', desc: 'Look straight at the camera.' },
       { id: 2, title: 'Slight Smile', desc: 'Give a small, natural smile.' },
       { id: 5, title: 'Look Up', desc: 'Tilt your head slightly upward.' },
     ];
   }, [captureCount]);
 
-  // --- Business Logic (Unchanged) ---
   useEffect(() => {
     if (hasPermission === false) {
       (async () => {
         const granted = await requestPermission();
         if (!granted) {
-          Alert.alert(
-            'Permission Required',
-            'Face enrollment needs camera access.',
-          );
+          Alert.alert('Permission Required', 'Face enrollment needs camera access.');
         }
       })();
     }
   }, [hasPermission, requestPermission]);
 
   useEffect(() => {
-    // Log entry into the screen
-    Logger.info(
-      `FaceEnrollmentScreen mounted for staff: ${staffData?.guid || 'UNKNOWN'}`,
-    );
+    Logger.info(`FaceEnrollmentScreen mounted for staff: ${staffData?.guid || 'UNKNOWN'}`);
 
     if (!staffData?.guid) {
-      Logger.warn(
-        'Enrollment aborted: Missing employee information (staffData.guid is null)',
-      );
+      Logger.warn('Enrollment aborted: Missing employee information (staffData.guid is null)');
       Alert.alert('Error', 'Missing employee information', [
         { text: 'Go Back', onPress: () => navigation.goBack() },
       ]);
@@ -149,33 +125,16 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
   }, [staffData, navigation]);
 
   const updateQualityFeedback = useCallback(async () => {
-    if (
-      !cameraRef.current ||
-      !isFocused ||
-      isCapturing ||
-      isFinalizing ||
-      !device ||
-      !cameraReady
-    )
+    if (!cameraRef.current || !isFocused || isCapturing || isFinalizing || !device || !cameraReady)
       return;
     let snapshotPath = null;
     try {
-      const snap = await cameraRef.current.takeSnapshot({
-        quality: 80,
-        skipMetadata: true,
-      });
+      const snap = await cameraRef.current.takeSnapshot({ quality: 80, skipMetadata: true });
       snapshotPath = `file://${snap.path}`;
-      const result = await checkFaceQualityRealTime(
-        snapshotPath,
-        cameraPosition,
-      );
-
-      console.log(result);
-
+      const result = await checkFaceQualityRealTime(snapshotPath, cameraPosition);
       setStatusText(result.message);
       setIsCaptureEnabled(result.canCapture);
     } catch (err) {
-      console.log('Quality check failed:', err);
       Logger.trace(`Quality check failed: ${err?.message}`);
     } finally {
       if (snapshotPath) RNFS.unlink(snapshotPath).catch(() => {});
@@ -188,18 +147,16 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
     return () => clearInterval(interval);
   }, [hasPermission, device, cameraReady, updateQualityFeedback]);
 
+  // ─── CF-ONLY CAPTURE FLOW ─────────────────────────────────────
+
   const handleCapture = useCallback(async () => {
     if (!cameraRef.current || isProcessing.current || !cameraReady) return;
 
-    Logger.info(
-      `Initiating capture for step ${currentStep + 1} (${
-        CAPTURE_STEPS[currentStep]?.title
-      })`,
-    );
+    Logger.info(`Initiating capture for step ${currentStep + 1} (${CAPTURE_STEPS[currentStep]?.title})`);
 
     isProcessing.current = true;
     setIsCapturing(true);
-    setStatusText('Analyzing...');
+    setStatusText('Capturing...');
 
     let photoPath = null;
     try {
@@ -209,66 +166,86 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         skipMetadata: true,
       });
       photoPath = `file://${photo.path}`;
-      const embedding = await getFaceEmbeddingFromImage(
-        photoPath,
-        cameraPosition,
-        true,
-      );
 
-      if (!embedding) {
-        Logger.warn(`Failed to extract embedding on step ${currentStep + 1}`);
-      }
-
-      let newEmbeddings = [...embeddings, embedding];
-
-      if (currentStep === 0) {
-        const base64 = await RNFS.readFile(photoPath, 'base64');
-        setReferenceBase64(base64);
-      }
-      setEmbeddings(newEmbeddings);
+      const base64 = await RNFS.readFile(photoPath, 'base64');
+      const newBase64s = [...capturedBase64s, base64];
+      setCapturedBase64s(newBase64s);
 
       if (currentStep < CAPTURE_STEPS.length - 1) {
         setCurrentStep(prev => prev + 1);
         setStatusText('Good! Next position...');
       } else {
         setIsFinalizing(true);
-        setStatusText('Finalizing...');
-        await finalizeEnrollment(newEmbeddings);
+        setStatusText('Enrolling...');
+        await cfFinalizeEnrollment(newBase64s);
       }
     } catch (error) {
-      Logger.error(
-        `Capture failed at step ${currentStep + 1}: ${error?.message}`,
-      );
+      Logger.error(`Capture failed at step ${currentStep + 1}: ${error?.message}`);
       Alert.alert('Capture Failed', error?.message || 'Try again.');
     } finally {
       setIsCapturing(false);
       isProcessing.current = false;
-
       resetFaceStabilizer();
-
       if (photoPath) RNFS.unlink(photoPath).catch(() => {});
     }
-  }, [
-    cameraReady,
-    currentStep,
-    embeddings,
-    cameraPosition,
-    staffData,
-    navigation,
-  ]);
+  }, [cameraReady, currentStep, capturedBase64s, cameraPosition, staffData, navigation]);
 
-  const finalizeEnrollment = async (finalEmbeddings, forceSave = false) => {
+  const cfFinalizeEnrollment = async allBase64s => {
+    try {
+      setIsFinalizing(true);
+      setStatusText('Enrolling face...');
+      Logger.info(`CF enrollment: uploading ${allBase64s.length} images for ${staffData?.guid}`);
+
+      const results = await Promise.all(
+        allBase64s.map(b64 => cfEnrollFace({ base64: b64, empGuid: staffData.guid })),
+      );
+
+      const succeeded = results.filter(r => r.success).length;
+      Logger.info(`CF enrollment done: ${succeeded}/${allBase64s.length} images uploaded`);
+
+      if (succeeded === 0) {
+        Alert.alert(
+          'Enrollment Failed',
+          'Could not upload face to the recognition service. Check your connection and try again.',
+        );
+        setCurrentStep(0);
+        setCapturedBase64s([]);
+        setStatusText('Position face in oval');
+        return;
+      }
+
+      // Save staff record locally with empty embeddings — CF handles recognition
+      const db = await connectToDatabase();
+      await updateFaceService({
+        db,
+        staffData,
+        base64: allBase64s[0],
+        embedding: [],
+        vectors: [],
+        cameraType: cameraPosition,
+        skipDuplicationCheck: true,
+      });
+
+      cfRefreshStaffCache();
+      onEnrollmentSuccess?.();
+      navigation.goBack();
+    } catch (err) {
+      Logger.error(`CF enrollment error: ${err?.message}`);
+      Alert.alert('System Error', err?.message || 'Enrollment failed unexpectedly.');
+    } finally {
+      setIsFinalizing(false);
+    }
+  };
+
+  // ─── LOCAL EMBEDDING FLOW — disabled ──────────────────────────
+  /*
+  const finalizeEnrollment = async (finalEmbeddings, forceSave = false, allBase64s = []) => {
     try {
       setIsFinalizing(true);
       setStatusText(forceSave ? 'Saving Face...' : 'Checking duplicates...');
 
       const validEmbeddings = finalEmbeddings.filter(
-        e =>
-          (Array.isArray(e) || e instanceof Float32Array) && e.length === 512,
-      );
-
-      Logger.info(
-        `Finalizing enrollment. forceSave: ${forceSave}, validEmbeddings: ${validEmbeddings.length}`,
+        e => (Array.isArray(e) || e instanceof Float32Array) && e.length === 512,
       );
 
       if (validEmbeddings.length === 0) {
@@ -279,7 +256,6 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
 
       const avgEmbedding = computeAverageAndNormalize(validEmbeddings);
       const vectors = validEmbeddings.map(v => normalizeVector(v));
-
       const db = await connectToDatabase();
 
       const result = await updateFaceService({
@@ -289,58 +265,45 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         embedding: avgEmbedding,
         vectors: vectors,
         cameraType: cameraPosition,
-        skipDuplicationCheck: forceSave, // Passes true if user clicked 'Continue'
+        skipDuplicationCheck: forceSave,
       });
 
-      console.log('Enrollment result:', result);
-
-      Logger.info(`updateFaceService response status: ${result?.status}`);
-
-      // SUCCESS
       if (result?.status === 'success') {
+        // cloud enroll was here
         onEnrollmentSuccess?.();
         navigation.goBack();
         return;
       }
 
-      // DUPLICATE FACE - Show Confirmation Dialog
       if (result?.status === 'duplicate' && !forceSave) {
-        setIsFinalizing(false); // Hide loader before showing alert
+        setIsFinalizing(false);
         setStatusText('Duplicate Found');
-
-        Logger.warn(`Duplicate face detected for staff: ${staffData.guid}`);
-
         Alert.alert(
           'Duplicate Face Detected',
-          result.message ||
-            'This face matches an existing employee. Do you want to continue and link it anyway?',
+          result.message || 'This face matches an existing employee.',
           [
             {
               text: 'Cancel',
               style: 'cancel',
               onPress: () => {
-                // Cancel the flow and reset states for a fresh try
                 setCurrentStep(0);
                 setEmbeddings([]);
                 setReferenceBase64(null);
+                setCapturedBase64s([]);
                 setStatusText('Position face in oval');
-
-                // OR if you want it to completely close the screen instead:
-                // navigation.goBack();
               },
             },
             {
               text: 'Continue',
               style: 'destructive',
-              onPress: () => finalizeEnrollment(finalEmbeddings, true), // Execute again with forceSave = true
+              onPress: () => finalizeEnrollment(finalEmbeddings, true, allBase64s),
             },
           ],
           { cancelable: false },
         );
-        return; // Exit here so we don't hit the standard error alerts below
+        return;
       }
 
-      // If it fails even WITH forceSave, or throws a standard error
       if (result?.status === 'duplicate' && forceSave) {
         Alert.alert('Duplicate Face', result.message);
       } else if (result?.status === 'error') {
@@ -349,11 +312,7 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
         Alert.alert('Enrollment Failed', 'Unexpected response from service.');
       }
     } catch (err) {
-      console.error('Enrollment crash:', err);
-      Alert.alert(
-        'System Error',
-        err?.message || 'Unexpected error occurred during enrollment.',
-      );
+      Alert.alert('System Error', err?.message || 'Unexpected error occurred during enrollment.');
     } finally {
       setIsFinalizing(false);
     }
@@ -361,23 +320,14 @@ export default function FaceEnrollmentScreen({ navigation, route }) {
 
   const computeAverageAndNormalize = vectors => {
     if (!vectors || vectors.length === 0) return [];
-
-    // normalize each embedding first
     const normalized = vectors.map(v => normalizeVector(v));
-
     const dim = normalized[0].length;
     const sum = new Array(dim).fill(0);
-
-    normalized.forEach(vec => {
-      vec.forEach((v, i) => {
-        sum[i] += v;
-      });
-    });
-
+    normalized.forEach(vec => { vec.forEach((v, i) => { sum[i] += v; }); });
     const avg = sum.map(v => v / normalized.length);
-
     return normalizeVector(avg);
   };
+  */
 
   // --- UI States ---
   if (hasPermission === null)
@@ -600,29 +550,11 @@ const styles = StyleSheet.create({
     zIndex: 15,
   },
   iconContainer: {
-    width: 20,
-    height: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  arrow: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 6,
-    borderRightWidth: 6,
-    borderBottomWidth: 8,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: 'white',
-  },
-  errorText: { color: '#ef4444', fontSize: 16 },
-
-  iconContainer: {
     width: 24,
     height: 24,
     justifyContent: 'center',
     alignItems: 'center',
-    transform: [{ rotate: '45deg' }], // Tilts the arrows nicely
+    transform: [{ rotate: '45deg' }],
   },
   curveTop: {
     position: 'absolute',
@@ -667,4 +599,5 @@ const styles = StyleSheet.create({
     left: 0,
     transform: [{ rotate: '0deg' }],
   },
+  errorText: { color: '#ef4444', fontSize: 16 },
 });

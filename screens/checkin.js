@@ -10,9 +10,9 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
-  Modal,
-  TextInput,
-  KeyboardAvoidingView,
+  // Modal,               // disabled: manual entry UI off
+  // TextInput,           // disabled: manual entry UI off
+  // KeyboardAvoidingView, // disabled: manual entry UI off
 } from 'react-native';
 
 import colors from '../constants/colors';
@@ -41,23 +41,25 @@ import SmallAlert from '../components/AttendanceComps/SmallAlert';
 
 import {
   loadVectorsService,
-  recognizeFaceService,
-  improveFaceModelService,
-  normalizeVector,
+  // recognizeFaceService,    // disabled: CompreFace is primary
+  // improveFaceModelService, // disabled: local model improvement off
+  // normalizeVector,         // disabled: no local embeddings
   setCurrentUser,
 } from '../services/face.service';
+
+import { cfRecognizeFace } from '../services/compreFace.service';
 
 import {
   processCheckInService,
   processCheckoutAndCheckinService,
-  manualEntryService,
+  // manualEntryService, // disabled: manual entry off
 } from '../services/attendance.service';
 
 import FaceConfirmationPopup from '../components/AttendanceComps/FaceConfirmationPopup';
 import MultipleMatchPopup from '../components/AttendanceComps/MultipleMatchPopup';
 
 import { useAuth } from '../AuthContext';
-import { getFaceEmbeddingFromImage } from '../utils/FaceRecognitionUtil';
+// import { getFaceEmbeddingFromImage } from '../utils/FaceRecognitionUtil'; // disabled: no local embeddings
 
 import {
   getDeviceSnapshot,
@@ -111,13 +113,13 @@ function CheckInScreen({
   // PHOTO STATES
   const [autoPhoto, setAutoPhoto] = useState(null); // For Auto Match
 
-  // MANUAL ENTRY STATES
+  // MANUAL ENTRY STATES — disabled
   const [isManualMode, setIsManualMode] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualEmpId, setManualEmpId] = useState('');
   const [manualPhoto, setManualPhoto] = useState(null);
 
-  const [capturedEmbedding, setCapturedEmbedding] = useState(null);
+  // const [capturedEmbedding, setCapturedEmbedding] = useState(null); // disabled: no local embeddings
 
   const cameraRef = useRef(null);
   const captureInterval = useRef(null);
@@ -195,7 +197,7 @@ function CheckInScreen({
       try {
         const database = await connectToDatabase();
         await createTables(database);
-        await loadVectorsService(database);
+        // await loadVectorsService(database);
         setInitialized(true);
         setDb(database);
         startLoggerEngine(user?.token || null);
@@ -293,10 +295,7 @@ function CheckInScreen({
     });
 
     try {
-      const faceResult = await recognizeFaceService({
-        cameraRef,
-        switchCamera: cameraPosition === 'front',
-      });
+      const faceResult = await cfRecognizeFace({ cameraRef });
 
       if (faceResult.status === 'no_match') {
         logEvent('check_in_face_no_match', {
@@ -338,7 +337,7 @@ function CheckInScreen({
         }
 
         setPendingPerson(faceResult.employee);
-        setCapturedEmbedding(faceResult.embedding);
+        // setCapturedEmbedding(faceResult.embedding); // disabled: no local embeddings
 
         console.log(faceResult.employee);
 
@@ -362,6 +361,7 @@ function CheckInScreen({
     }
   };
 
+  /* MANUAL ENTRY HANDLERS — disabled
   const handleManualCapture = async () => {
     if (!cameraRef.current) return;
     setIsWorking(true);
@@ -433,23 +433,6 @@ function CheckInScreen({
         return;
       }
 
-      const base64Image = await processPhotoToBase64(manualPhoto);
-
-      const embedding = await getFaceEmbeddingFromImage(
-        manualPhoto.path,
-        cameraPosition,
-      );
-
-      if (embedding) {
-        improveFaceModelService({
-          db,
-          staffId: serviceResult.employee.staffid,
-          uuid: serviceResult.employee.uuid,
-          newEmbedding: normalizeVector(embedding),
-          base64Image,
-        });
-      }
-
       if (serviceResult.status === 'already_checkedin') {
         logEvent('check_in_manual_already_checkedin', {
           employee: { staffid: serviceResult.employee?.staffid, name: serviceResult.employee?.name },
@@ -494,6 +477,7 @@ function CheckInScreen({
       setIsWorking(false);
     }
   };
+  */
 
   if (!initialized) {
     return (
@@ -571,6 +555,7 @@ function CheckInScreen({
         </Text>
       </View>
 
+      {/* MANUAL ENTRY TOGGLE — disabled
       <TouchableOpacity
         style={styles.manualToggleBtn}
         onPress={() => setIsManualMode(!isManualMode)}
@@ -579,6 +564,7 @@ function CheckInScreen({
           {isManualMode ? 'Cancel Manual' : 'Manual Entry'}
         </Text>
       </TouchableOpacity>
+      */}
 
       <TouchableOpacity
         style={styles.floatingSwitch}
@@ -598,12 +584,14 @@ function CheckInScreen({
           />
         )}
 
+        {/* MANUAL CAPTURE BUTTON — disabled
         {isManualMode && !isWorking && !showManualModal && (
           <TouchableOpacity
             style={styles.captureBtn}
             onPress={handleManualCapture}
           />
         )}
+        */}
 
         {empID && (
           <Text style={styles.successText}>✓ Checked in: {empID.name}</Text>
@@ -612,15 +600,11 @@ function CheckInScreen({
         {errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
 
         {!isWorking && !empID && !errorMsg && (
-          <Text style={styles.instructionText}>
-            {isManualMode
-              ? 'Guide employee face into frame and tap Capture'
-              : 'Position your face in the frame'}
-          </Text>
+          <Text style={styles.instructionText}>Position your face in the frame</Text>
         )}
       </View>
 
-      {/* MANUAL EMP ID MODAL */}
+      {/* MANUAL EMP ID MODAL — disabled
       <Modal visible={showManualModal} transparent animationType="fade">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
@@ -662,6 +646,7 @@ function CheckInScreen({
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      */}
 
       {/* ACTIVE CHECKIN SWITCH CONFIRMATION */}
       <ActiveCheckinPopup
@@ -710,7 +695,7 @@ function CheckInScreen({
         onSelect={person => {
           setMatchedPersons([]);
           setPendingPerson(person);
-          setCapturedEmbedding(person.embedding);
+          // setCapturedEmbedding(person.embedding); // disabled: no local embeddings
           setShowConfirmation(true);
         }}
         onCancel={() => setMatchedPersons([])}
@@ -764,18 +749,18 @@ function CheckInScreen({
                 //   SoundPlayer.playAsset(successSound);
                 // } catch {}
 
-                // Trigger background face improvement (Fire and forget)
-                if (capturedEmbedding && autoPhoto) {
-                  improveFaceModelService({
-                    db,
-                    staffId: pendingPerson.staffid,
-                    uuid: pendingPerson.uuid,
-                    newEmbedding: capturedEmbedding,
-                    base64Image: base64Image,
-                  }).catch(err =>
-                    console.log('Background learning failed', err),
-                  );
-                }
+                // Local face model improvement disabled — CompreFace handles recognition
+                // if (capturedEmbedding && autoPhoto) {
+                //   improveFaceModelService({
+                //     db,
+                //     staffId: pendingPerson.staffid,
+                //     uuid: pendingPerson.uuid,
+                //     newEmbedding: capturedEmbedding,
+                //     base64Image: base64Image,
+                //   }).catch(err =>
+                //     console.log('Background learning failed', err),
+                //   );
+                // }
 
                 setTimeout(() => setEmpID(null), 3000);
                 return;

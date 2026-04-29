@@ -251,6 +251,17 @@ export const getStaffByCreatedBy = async (db, createdBy) => {
   }
 };
 
+/* =========================================================
+   GET STAFF BY UUID
+========================================================= */
+export const getStaffByUuid = async (db, uuid) => {
+  return fetchOne(
+    db,
+    `SELECT uuid, staffid, name, img FROM facevector WHERE uuid = ?`,
+    [uuid],
+  );
+};
+
 /**
  * Truncate the facevector table (delete all staff records)
  */

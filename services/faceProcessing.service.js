@@ -13,18 +13,19 @@ export const resetFaceStabilizer = () => {
 };
 
 /**
- * Highly accurate, production-grade face evaluation function.
+ * Forgiving, user-friendly face evaluation function.
  * Implements weighted scoring, eye-based alignment, multi-frame stability,
  * capture locking, and precise real-time directional feedback.
- * * @param {Array} faces - Array of detected faces from ML Kit
+ * @param {Array} faces - Array of detected faces from ML Kit
  * @param {Object} imageSize - { width, height } of the current frame
  * @param {String} cameraType - 'front' or 'back' (to handle mirror logic)
  * @returns {Object} { isReady, canCapture, score, message, face }
  */
 export const evaluateFaceQuality = (faces, imageSize, cameraType = 'front') => {
-  const REQUIRED_STABLE_FRAMES = 3;
-  const CAPTURE_DELAY_MS = 300;
-  const SCORE_THRESHOLD = 70;
+  // Relaxed stability constraints
+  const REQUIRED_STABLE_FRAMES = 2;
+  const CAPTURE_DELAY_MS = 150;
+  const SCORE_THRESHOLD = 55;
 
   // ────────────────────────────────────────────────
   // 1️⃣ Single Face Enforcement
@@ -52,10 +53,10 @@ export const evaluateFaceQuality = (faces, imageSize, cameraType = 'front') => {
     const primaryArea = primaryFace.frame.width * primaryFace.frame.height;
     const secondaryArea =
       secondaryFace.frame.width * secondaryFace.frame.height;
-
     const secondaryConfidence = secondaryFace.confidence ?? 0;
 
-    if (secondaryArea > primaryArea * 0.25 && secondaryConfidence > 0.4) {
+    // Slightly more forgiving on background faces
+    if (secondaryArea > primaryArea * 0.35 && secondaryConfidence > 0.5) {
       resetFaceStabilizer();
       return {
         isReady: false,
@@ -76,7 +77,7 @@ export const evaluateFaceQuality = (faces, imageSize, cameraType = 'front') => {
   // ────────────────────────────────────────────────
   if (face.confidence !== undefined) {
     score += face.confidence * 20;
-    if (face.confidence < 0.3) feedback.push('Move to a better lit area');
+    if (face.confidence < 0.2) feedback.push('Move to a better lit area');
   } else {
     score += 20;
   }
@@ -89,13 +90,14 @@ export const evaluateFaceQuality = (faces, imageSize, cameraType = 'front') => {
   const roll = face.rollAngle ?? 0; // Tilt
 
   const rotDeviation = Math.abs(yaw) + Math.abs(pitch) + Math.abs(roll);
-  score += Math.max(0, 30 - rotDeviation * 0.8); // Deduct points based on severity of rotation
+  score += Math.max(0, 30 - rotDeviation * 0.5); // Less aggressive point deduction
 
-  if (Math.abs(yaw) > 12)
+  // Relaxed rotation angles
+  if (Math.abs(yaw) > 20)
     feedback.push(yaw > 0 ? 'Turn slightly left' : 'Turn slightly right');
-  if (Math.abs(pitch) > 12)
+  if (Math.abs(pitch) > 20)
     feedback.push(pitch > 0 ? 'Look slightly down' : 'Look slightly up');
-  if (Math.abs(roll) > 8) feedback.push('Keep your head straight');
+  if (Math.abs(roll) > 15) feedback.push('Keep your head straight');
 
   // ────────────────────────────────────────────────
   // 4️⃣ Advanced Eye-Based Alignment (Max 25 points)
@@ -118,17 +120,18 @@ export const evaluateFaceQuality = (faces, imageSize, cameraType = 'front') => {
   const hOffset = (faceCenterX - imgW / 2) / (imgW / 2);
   const vOffset = (faceCenterY - imgH / 2) / (imgH / 2);
 
-  score += Math.max(0, 25 - (Math.abs(hOffset) + Math.abs(vOffset)) * 50);
+  score += Math.max(0, 25 - (Math.abs(hOffset) + Math.abs(vOffset)) * 30); // Less aggressive point deduction
 
   const isFront = cameraType === 'front';
 
-  if (hOffset > 0.15) {
+  // Wider bounding box for "center"
+  if (hOffset > 0.25) {
     feedback.push(
       isFront
         ? 'Center your face (move device slightly left)'
         : 'Center your face (move device slightly right)',
     );
-  } else if (hOffset < -0.15) {
+  } else if (hOffset < -0.25) {
     feedback.push(
       isFront
         ? 'Center your face (move device slightly right)'
@@ -136,8 +139,8 @@ export const evaluateFaceQuality = (faces, imageSize, cameraType = 'front') => {
     );
   }
 
-  if (vOffset > 0.2) feedback.push('Center your face (move device up)');
-  else if (vOffset < -0.2) feedback.push('Center your face (move device down)');
+  if (vOffset > 0.3) feedback.push('Center your face (move device up)');
+  else if (vOffset < -0.3) feedback.push('Center your face (move device down)');
 
   // ────────────────────────────────────────────────
   // 5️⃣ Face Size Ratio (Max 15 points)
@@ -146,14 +149,15 @@ export const evaluateFaceQuality = (faces, imageSize, cameraType = 'front') => {
   const minDimension = Math.min(imgW, imgH);
   const faceRatio = (faceSizePx / minDimension) * 100;
 
-  if (faceRatio >= 40 && faceRatio <= 70) {
+  // Broadened acceptable ratio sizes
+  if (faceRatio >= 30 && faceRatio <= 85) {
     score += 15;
   } else {
-    score += Math.max(0, 15 - Math.abs(55 - faceRatio) * 0.5);
+    score += Math.max(0, 15 - Math.abs(55 - faceRatio) * 0.3);
   }
 
-  if (faceRatio < 40) feedback.push('Move closer to the camera');
-  else if (faceRatio > 70) feedback.push('Move slightly further away');
+  if (faceRatio < 30) feedback.push('Move closer to the camera');
+  else if (faceRatio > 85) feedback.push('Move slightly further away');
 
   // ────────────────────────────────────────────────
   // 6️⃣ Eye Openness (Max 10 points)
@@ -162,7 +166,8 @@ export const evaluateFaceQuality = (faces, imageSize, cameraType = 'front') => {
   const rightEyeOpen = face.rightEyeOpenProbability ?? 1;
   score += ((leftEyeOpen + rightEyeOpen) / 2) * 10;
 
-  if (leftEyeOpen < 0.7 || rightEyeOpen < 0.7)
+  // More forgiving on squinting/heavy eyelids
+  if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4)
     feedback.push('Keep both eyes fully open');
 
   // ────────────────────────────────────────────────
